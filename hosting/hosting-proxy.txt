@@ -1,0 +1,1 @@
+Firebase Hosting forwards application requests to the aimasho web service.
