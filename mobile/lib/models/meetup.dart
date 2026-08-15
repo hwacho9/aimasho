@@ -43,7 +43,7 @@ class Meetup {
   final DateTime? confirmedDateTime;
   final Location? meetingPlace;
   final DateTime? targetArrivalTime;
-  bool get isConfirmed => status == 'SCHEDULE_CONFIRMED';
+  bool get isConfirmed => status != 'SCHEDULING';
 }
 
 class Participant {
@@ -60,6 +60,18 @@ class Participant {
   final bool isHost;
   final bool hasOrigin;
   final String? originArea;
+}
+
+class RelationshipStat {
+  const RelationshipStat(
+      {required this.otherUid,
+      required this.displayName,
+      required this.sharedMeetupCount,
+      this.lastMeetupId});
+  final String otherUid;
+  final String displayName;
+  final int sharedMeetupCount;
+  final String? lastMeetupId;
 }
 
 class CandidateSlot {

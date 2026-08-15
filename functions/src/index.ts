@@ -37,6 +37,13 @@ interface CreateMeetupInput {
 
 type LocationInput = Location;
 
+interface ExpensePayload {
+  title: string;
+  amount: number;
+  paidByUid: string;
+  participantUids: string[];
+}
+
 function requireUid(uid: string | undefined): string {
   if (!uid) throw new HttpsError("unauthenticated", "Sign in is required.");
   return uid;
@@ -62,6 +69,15 @@ function parseIsoDate(value: unknown): string {
   return date.toISOString();
 }
 
+function requireIsoDateTime(value: unknown, field: string): Date {
+  const raw = requireString(value, field);
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    throw new HttpsError("invalid-argument", `${field} must be a valid ISO datetime.`);
+  }
+  return date;
+}
+
 function requireLocation(value: unknown, field = "location"): LocationInput {
   if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", `${field} is invalid.`);
   const input = value as Partial<LocationInput>;
@@ -76,6 +92,29 @@ function requireLocation(value: unknown, field = "location"): LocationInput {
 function requireMeetingPointMode(value: unknown): MeetingPointMode {
   if (value === "FAIR" || value === "FAST") return value;
   throw new HttpsError("invalid-argument", "mode must be FAIR or FAST.");
+}
+
+function requireExpensePayload(value: unknown): ExpensePayload {
+  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", "Expense input is invalid.");
+  const input = value as Partial<ExpensePayload>;
+  const title = requireString(input.title, "title", 120);
+  const amount = input.amount;
+  if (!Number.isInteger(amount) || amount === undefined || amount <= 0 || amount > 10_000_000) {
+    throw new HttpsError("invalid-argument", "amount must be a positive integer yen amount.");
+  }
+  const paidByUid = requireString(input.paidByUid, "paidByUid", 128);
+  if (!Array.isArray(input.participantUids) || input.participantUids.length === 0 || input.participantUids.some((id) => typeof id !== "string" || id.length === 0)) {
+    throw new HttpsError("invalid-argument", "participantUids is invalid.");
+  }
+  return { title, amount, paidByUid, participantUids: [...new Set(input.participantUids)] };
+}
+
+async function validateExpenseParticipants(meetupId: string, expense: ExpensePayload): Promise<void> {
+  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
+  const participantSet = new Set(participants.docs.map((participant) => participant.id));
+  if (!participantSet.has(expense.paidByUid) || expense.participantUids.some((id) => !participantSet.has(id))) {
+    throw new HttpsError("invalid-argument", "Payer and sharers must be participants.");
+  }
 }
 
 function mapsUrl(origin: Location, destination: Location): string {
@@ -137,6 +176,60 @@ async function requireHost(meetupId: string, uid: string) {
   }
 }
 
+interface RegisteredParticipant {
+  uid: string;
+  displayName: string;
+}
+
+function relationshipPairId(firstUid: string, secondUid: string): string {
+  return Buffer.from([firstUid, secondUid].sort().join("\u0000")).toString("base64url");
+}
+
+async function isRegisteredUser(uid: string): Promise<boolean> {
+  const profile = await db.doc(`users/${uid}`).get();
+  return profile.data()?.accountType === "REGISTERED";
+}
+
+async function registeredParticipants(meetupId: string): Promise<RegisteredParticipant[]> {
+  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
+  if (participants.empty) return [];
+  const profiles = await db.getAll(...participants.docs.map((participant) => db.doc(`users/${participant.id}`)));
+  const profilesByUid = new Map(profiles.filter((profile) => profile.data()?.accountType === "REGISTERED").map((profile) => [profile.id, profile.data()]));
+  return participants.docs.flatMap((participant) => {
+    const profile = profilesByUid.get(participant.id);
+    return profile ? [{ uid: participant.id, displayName: profile.displayName ?? participant.data().displayName ?? "aimasho user" }] : [];
+  });
+}
+
+async function recordRelationshipPair(meetupId: string, first: RegisteredParticipant, second: RegisteredParticipant): Promise<void> {
+  if (first.uid === second.uid) return;
+  const pairId = relationshipPairId(first.uid, second.uid);
+  const pair = db.doc(`meetups/${meetupId}/relationshipPairs/${pairId}`);
+  const firstRelationship = db.doc(`users/${first.uid}/relationships/${second.uid}`);
+  const secondRelationship = db.doc(`users/${second.uid}/relationships/${first.uid}`);
+  await db.runTransaction(async (transaction) => {
+    if ((await transaction.get(pair)).exists) return;
+    transaction.set(pair, { participantUids: [first.uid, second.uid].sort(), createdAt: FieldValue.serverTimestamp() });
+    transaction.set(firstRelationship, { otherUid: second.uid, displayName: second.displayName, sharedMeetupCount: FieldValue.increment(1), lastMeetupId: meetupId, lastMeetupAt: FieldValue.serverTimestamp() }, { merge: true });
+    transaction.set(secondRelationship, { otherUid: first.uid, displayName: first.displayName, sharedMeetupCount: FieldValue.increment(1), lastMeetupId: meetupId, lastMeetupAt: FieldValue.serverTimestamp() }, { merge: true });
+  });
+}
+
+/** Records each registered pair once per meetup. Pair marker documents make this safe to retry. */
+async function recordRelationshipsForMeetup(meetupId: string, onlyForUid?: string): Promise<void> {
+  const participants = await registeredParticipants(meetupId);
+  const pairs = onlyForUid
+    ? participants.filter((participant) => participant.uid === onlyForUid).flatMap((participant) => participants.filter((other) => other.uid !== participant.uid).map((other) => [participant, other] as const))
+    : participants.flatMap((participant, index) => participants.slice(index + 1).map((other) => [participant, other] as const));
+  await Promise.all(pairs.map(([first, second]) => recordRelationshipPair(meetupId, first, second)));
+}
+
+async function recordRelationshipsForRegisteredUser(uid: string): Promise<void> {
+  const participations = await db.collectionGroup("participants").where("uid", "==", uid).get();
+  const meetupIds = new Set(participations.docs.map((participation) => participation.ref.parent.parent?.id).filter((meetupId): meetupId is string => Boolean(meetupId)));
+  await Promise.all([...meetupIds].map((meetupId) => recordRelationshipsForMeetup(meetupId, uid)));
+}
+
 export const createMeetup = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const data = request.data as Partial<CreateMeetupInput>;
@@ -192,6 +285,11 @@ export const createMeetup = onCall(async (request) => {
     batch.set(slot, { id: slot.id, startDateTime: Timestamp.fromDate(new Date(startDateTime)), createdAt: now });
   }
   await batch.commit();
+  try {
+    await recordRelationshipsForMeetup(meetup.id);
+  } catch (caught) {
+    console.error("Could not record meetup relationships", { meetupId: meetup.id, message: caught instanceof Error ? caught.message : "Unknown error" });
+  }
   return { meetupId: meetup.id };
 });
 
@@ -202,9 +300,11 @@ export const joinMeetup = onCall(async (request) => {
   const meetup = db.doc(`meetups/${meetupId}`);
   if (!(await meetup.get()).exists) throw new HttpsError("not-found", "Meetup not found.");
   const participant = meetup.collection("participants").doc(uid);
+  let joinedNow = false;
   await db.runTransaction(async (transaction) => {
     const existing = await transaction.get(participant);
     if (existing.exists && existing.data()?.isHost === true) return;
+    joinedNow = !existing.exists;
     transaction.set(participant, {
       uid,
       displayName,
@@ -213,6 +313,13 @@ export const joinMeetup = onCall(async (request) => {
       joinedAt: existing.data()?.joinedAt ?? FieldValue.serverTimestamp(),
     }, { merge: true });
   });
+  if (joinedNow) {
+    try {
+      await recordRelationshipsForMeetup(meetupId, uid);
+    } catch (caught) {
+      console.error("Could not record joined meetup relationships", { meetupId, uid, message: caught instanceof Error ? caught.message : "Unknown error" });
+    }
+  }
   return { meetupId };
 });
 
@@ -239,7 +346,15 @@ export const upsertVote = onCall(async (request) => {
   const slotId = requireString(request.data?.slotId, "slotId", 128);
   const status = requireVoteStatus(request.data?.status);
   await requireParticipant(meetupId, uid);
-  const slot = await db.doc(`meetups/${meetupId}/candidateSlots/${slotId}`).get();
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const [meetupSnapshot, slot] = await Promise.all([
+    meetup.get(),
+    db.doc(`meetups/${meetupId}/candidateSlots/${slotId}`).get(),
+  ]);
+  if (!meetupSnapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+  if (meetupSnapshot.data()?.status !== "SCHEDULING") {
+    throw new HttpsError("failed-precondition", "Voting is closed after the schedule is confirmed.");
+  }
   if (!slot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
   await db.doc(`meetups/${meetupId}/votes/${uid}_${slotId}`).set({
     participantUid: uid,
@@ -297,12 +412,72 @@ export const confirmSchedule = onCall(async (request) => {
   return { status: "SCHEDULE_CONFIRMED", confirmedDateTime };
 });
 
+/**
+ * Lets the host revise a confirmed date/time. Meeting place and private
+ * origins remain intact, while routes and departure notifications are removed
+ * because both are tied to the previous arrival time.
+ */
+export const updateConfirmedSchedule = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const confirmedDate = requireIsoDateTime(request.data?.confirmedDateTime, "confirmedDateTime");
+  await requireHost(meetupId, uid);
+
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const meetupSnapshot = await meetup.get();
+  if (!meetupSnapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+  const previousStatus = meetupSnapshot.data()?.status as MeetupStatus | undefined;
+  if (!previousStatus || previousStatus === "SCHEDULING") {
+    throw new HttpsError("failed-precondition", "Confirm a schedule before changing it.");
+  }
+  if (previousStatus === "COMPLETED") {
+    throw new HttpsError("failed-precondition", "Completed meetups cannot be changed.");
+  }
+
+  const [routes, notifications] = await Promise.all([
+    meetup.collection("routes").get(),
+    db.collection("departureNotifications").where("meetupId", "==", meetupId).get(),
+  ]);
+  if (routes.size + notifications.size > 450) {
+    throw new HttpsError("resource-exhausted", "Too many stale route records to reset at once.");
+  }
+
+  const nextStatus: MeetupStatus = meetupSnapshot.data()?.meetingPlace
+    ? "LOCATION_CONFIRMED"
+    : "SCHEDULE_CONFIRMED";
+  const batch = db.batch();
+  batch.update(meetup, {
+    confirmedDateTime: Timestamp.fromDate(confirmedDate),
+    status: nextStatus,
+    targetArrivalTime: FieldValue.delete(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  routes.docs.forEach((route) => batch.delete(route.ref));
+  notifications.docs.forEach((notification) => batch.delete(notification.ref));
+  await batch.commit();
+
+  return {
+    status: nextStatus,
+    confirmedDateTime: confirmedDate.toISOString(),
+    routesReset: routes.size,
+  };
+});
+
 export const searchPlaces = onCall(async (request) => {
   requireUid(request.auth?.uid);
   const query = requireString(request.data?.query, "query", 160);
   const near = request.data?.near ? requireLocation(request.data.near, "near") : undefined;
-  const places = await getMapsProvider().searchPlaces(query, near);
-  return { places };
+  try {
+    const places = await getMapsProvider().searchPlaces(query, near);
+    return { places };
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : "Unknown Places API error.";
+    console.error("searchPlaces failed", { message });
+    if (message.startsWith("Google Places request failed")) {
+      throw new HttpsError("failed-precondition", "Google Places API access was denied. Check the server key, billing, and Places API settings.");
+    }
+    throw caught;
+  }
 });
 
 export const saveOrigin = onCall(async (request) => {
@@ -476,19 +651,40 @@ export const sendDepartureNotifications = onSchedule("every 1 minutes", async ()
 export const createExpense = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
-  const title = requireString(request.data?.title, "title", 120);
-  const amount = request.data?.amount;
-  if (!Number.isInteger(amount) || amount <= 0 || amount > 10_000_000) throw new HttpsError("invalid-argument", "amount must be a positive integer yen amount.");
-  const paidByUid = requireString(request.data?.paidByUid, "paidByUid", 128);
-  const participantUids = request.data?.participantUids;
-  if (!Array.isArray(participantUids) || participantUids.length === 0 || participantUids.some((id) => typeof id !== "string")) throw new HttpsError("invalid-argument", "participantUids is invalid.");
+  const input = requireExpensePayload(request.data);
   await requireParticipant(meetupId, uid);
-  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
-  const participantSet = new Set(participants.docs.map((participant) => participant.id));
-  if (!participantSet.has(paidByUid) || participantUids.some((id) => !participantSet.has(id))) throw new HttpsError("invalid-argument", "Payer and sharers must be participants.");
+  await validateExpenseParticipants(meetupId, input);
   const expense = db.collection(`meetups/${meetupId}/expenses`).doc();
-  await expense.set({ id: expense.id, title, amount, paidByUid, participantUids: [...new Set(participantUids)], createdByUid: uid, createdAt: FieldValue.serverTimestamp() });
+  await expense.set({ id: expense.id, ...input, createdByUid: uid, createdAt: FieldValue.serverTimestamp() });
   return { expenseId: expense.id };
+});
+
+export const updateExpense = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const expenseId = requireString(request.data?.expenseId, "expenseId", 128);
+  const input = requireExpensePayload(request.data);
+  await requireParticipant(meetupId, uid);
+  const expense = db.doc(`meetups/${meetupId}/expenses/${expenseId}`);
+  const snapshot = await expense.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Expense not found.");
+  if (snapshot.data()?.createdByUid !== uid) throw new HttpsError("permission-denied", "Only the expense creator can edit it.");
+  await validateExpenseParticipants(meetupId, input);
+  await expense.update({ ...input, updatedAt: FieldValue.serverTimestamp() });
+  return { expenseId };
+});
+
+export const deleteExpense = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const expenseId = requireString(request.data?.expenseId, "expenseId", 128);
+  await requireParticipant(meetupId, uid);
+  const expense = db.doc(`meetups/${meetupId}/expenses/${expenseId}`);
+  const snapshot = await expense.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Expense not found.");
+  if (snapshot.data()?.createdByUid !== uid) throw new HttpsError("permission-denied", "Only the expense creator can delete it.");
+  await expense.delete();
+  return { expenseId };
 });
 
 export const calculateSettlementResult = onCall(async (request) => {
@@ -505,7 +701,47 @@ export const saveProfile = onCall(async (request) => {
   const displayName = requireString(request.data?.displayName, "displayName", 60);
   const accountType = request.auth?.token.firebase?.sign_in_provider === "anonymous" ? "ANONYMOUS" : "REGISTERED";
   await db.doc(`users/${uid}`).set({ uid, displayName, accountType, updatedAt: FieldValue.serverTimestamp(), createdAt: FieldValue.serverTimestamp() }, { merge: true });
+  if (accountType === "REGISTERED") {
+    try {
+      await recordRelationshipsForRegisteredUser(uid);
+    } catch (caught) {
+      console.error("Could not backfill profile relationships", { uid, message: caught instanceof Error ? caught.message : "Unknown error" });
+    }
+  }
   return { uid, displayName, accountType };
+});
+
+export const getMeetupRelationships = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireParticipant(meetupId, uid);
+  if (!(await isRegisteredUser(uid))) return { relationships: [] };
+  await recordRelationshipsForMeetup(meetupId, uid);
+  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
+  const relationships = await db.getAll(...participants.docs.filter((participant) => participant.id !== uid).map((participant) => db.doc(`users/${uid}/relationships/${participant.id}`)));
+  return {
+    relationships: relationships.flatMap((relationship) => relationship.exists ? [{
+      otherUid: relationship.id,
+      displayName: relationship.data()?.displayName ?? "aimasho user",
+      sharedMeetupCount: relationship.data()?.sharedMeetupCount ?? 0,
+      lastMeetupId: relationship.data()?.lastMeetupId ?? null,
+    }] : []),
+  };
+});
+
+export const getMyRelationships = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  if (!(await isRegisteredUser(uid))) return { relationships: [] };
+  await recordRelationshipsForRegisteredUser(uid);
+  const relationships = await db.collection(`users/${uid}/relationships`).orderBy("lastMeetupAt", "desc").limit(100).get();
+  return {
+    relationships: relationships.docs.map((relationship) => ({
+      otherUid: relationship.id,
+      displayName: relationship.data().displayName ?? "aimasho user",
+      sharedMeetupCount: relationship.data().sharedMeetupCount ?? 0,
+      lastMeetupId: relationship.data().lastMeetupId ?? null,
+    })),
+  };
 });
 
 export const saveDefaultOrigin = onCall(async (request) => {

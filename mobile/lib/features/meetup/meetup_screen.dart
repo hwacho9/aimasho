@@ -29,6 +29,7 @@ class MeetupScreen extends ConsumerWidget {
         final mine = _participantFor(detail.participants, uid);
         final isHost = mine?.isHost ?? false;
         final recommendation = ref.watch(recommendationProvider(meetupId));
+        final relationships = ref.watch(meetupRelationshipsProvider(meetupId));
         return Scaffold(
           appBar: AppBar(
               title: const Text('aimasho',
@@ -36,12 +37,15 @@ class MeetupScreen extends ConsumerWidget {
           body: RefreshIndicator(
             onRefresh: () async {
               ref.invalidate(recommendationProvider(meetupId));
+              ref.invalidate(meetupRelationshipsProvider(meetupId));
               await ref.read(recommendationProvider(meetupId).future);
             },
             child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 38),
                 children: [
-                  _Header(detail: detail),
+                  _Header(
+                      detail: detail,
+                      relationships: relationships.valueOrNull ?? const []),
                   if (isHost && !detail.meetup.isConfirmed)
                     _InviteHint(meetupId: meetupId),
                   const SizedBox(height: 25),
@@ -83,6 +87,12 @@ class MeetupScreen extends ConsumerWidget {
                       onChanged: () =>
                           ref.invalidate(recommendationProvider(meetupId)))),
                   if (isHost &&
+                      detail.meetup.isConfirmed &&
+                      detail.meetup.confirmedDateTime != null)
+                    _ScheduleChangeCard(
+                        meetupId: meetupId,
+                        confirmedDateTime: detail.meetup.confirmedDateTime!),
+                  if (isHost &&
                       !detail.meetup.isConfirmed &&
                       recommendation.hasValue &&
                       recommendation.value!.recommended != null)
@@ -104,8 +114,9 @@ class MeetupScreen extends ConsumerWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.detail});
+  const _Header({required this.detail, required this.relationships});
   final MeetupDetail detail;
+  final List<RelationshipStat> relationships;
   @override
   Widget build(BuildContext context) {
     final confirmedText = detail.meetup.confirmedDateTime == null
@@ -166,8 +177,44 @@ class _Header extends StatelessWidget {
       Text(
           '${detail.participants.map((participant) => participant.displayName).join(' · ')}  ·  ${detail.participants.length}명 참여',
           style: const TextStyle(color: AimashoColors.muted, fontSize: 12)),
+      if (relationships.isNotEmpty)
+        Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(top: 16),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+                color: const Color(0xFFFFF4ED),
+                borderRadius: BorderRadius.circular(12)),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: relationships
+                    .map((relationship) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(children: [
+                          Expanded(
+                              child: Text(
+                                  '${relationship.displayName} · 함께한 약속 ${relationship.sharedMeetupCount}회',
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700))),
+                          Text(
+                              _relationshipLabel(
+                                  relationship.sharedMeetupCount),
+                              style: const TextStyle(
+                                  color: AimashoColors.coral,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800))
+                        ])))
+                    .toList()))
     ]);
   }
+}
+
+String _relationshipLabel(int sharedMeetupCount) {
+  if (sharedMeetupCount >= 8) return '찐친';
+  if (sharedMeetupCount >= 4) return '자주 만나는 친구';
+  if (sharedMeetupCount >= 2) return '함께 만나는 사이';
+  return '새로운 친구';
 }
 
 class _InviteHint extends StatelessWidget {
@@ -253,6 +300,13 @@ class _ScheduleCardState extends ConsumerState<_ScheduleCard> {
         .fold<AvailabilityVote?>(null, (_, vote) => vote);
     final confirmed = widget.detail.meetup.confirmedDateTime?.toUtc() ==
         widget.slot.startDateTime.toUtc();
+    final votesForSlot = widget.detail.votes
+        .where((vote) => vote.slotId == widget.slot.id)
+        .toList();
+    final participantNames = {
+      for (final participant in widget.detail.participants)
+        participant.uid: participant.displayName
+    };
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -317,6 +371,36 @@ class _ScheduleCardState extends ConsumerState<_ScheduleCard> {
                           color: AimashoColors.green,
                           fontWeight: FontWeight.w800))
               ])),
+        if (votesForSlot.isNotEmpty)
+          Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: votesForSlot.map((vote) {
+                    final color = switch (vote.status) {
+                      VoteStatus.yes => AimashoColors.green,
+                      VoteStatus.maybe => AimashoColors.yellow,
+                      VoteStatus.no => AimashoColors.red
+                    };
+                    final background = switch (vote.status) {
+                      VoteStatus.yes => const Color(0xFFEAF8EF),
+                      VoteStatus.maybe => const Color(0xFFFFF6DF),
+                      VoteStatus.no => const Color(0xFFFFF0EE)
+                    };
+                    return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 5),
+                        decoration: BoxDecoration(
+                            color: background,
+                            borderRadius: BorderRadius.circular(99)),
+                        child: Text(
+                            '${vote.status.symbol} ${participantNames[vote.participantUid] ?? '알 수 없음'}',
+                            style: TextStyle(
+                                color: color,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700)));
+                  }).toList())),
         if (!widget.detail.meetup.isConfirmed && widget.uid != null)
           Padding(
               padding: const EdgeInsets.only(top: 14),
@@ -325,6 +409,80 @@ class _ScheduleCardState extends ConsumerState<_ScheduleCard> {
       ]),
     );
   }
+}
+
+class _ScheduleChangeCard extends ConsumerStatefulWidget {
+  const _ScheduleChangeCard(
+      {required this.meetupId, required this.confirmedDateTime});
+  final String meetupId;
+  final DateTime confirmedDateTime;
+  @override
+  ConsumerState<_ScheduleChangeCard> createState() =>
+      _ScheduleChangeCardState();
+}
+
+class _ScheduleChangeCardState extends ConsumerState<_ScheduleChangeCard> {
+  bool _saving = false;
+
+  Future<void> _change() async {
+    final initial = widget.confirmedDateTime.toLocal();
+    final date = await showDatePicker(
+        context: context,
+        initialDate: initial,
+        firstDate: DateTime(2020),
+        lastDate: DateTime(2100));
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+        context: context, initialTime: TimeOfDay.fromDateTime(initial));
+    if (time == null || !mounted) return;
+    final next =
+        DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(meetupRepositoryProvider)
+          .updateConfirmedSchedule(widget.meetupId, next);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('집합 시간을 변경했어요. 출발 경로를 다시 계산해 주세요.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('집합 시간을 변경하지 못했어요: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFFF5ED),
+          border: Border.all(color: const Color(0xFFE7C1AF)),
+          borderRadius: BorderRadius.circular(18)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('HOST SETTINGS',
+            style: TextStyle(
+                color: AimashoColors.coral,
+                fontSize: 11,
+                letterSpacing: 1.1,
+                fontWeight: FontWeight.w800)),
+        const SizedBox(height: 5),
+        const Text('집합 날짜·시간 변경',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+        const SizedBox(height: 5),
+        const Text('변경 후 출발 경로와 알림은 새 시간 기준으로 다시 계산해 주세요.',
+            style: TextStyle(color: AimashoColors.muted, fontSize: 12)),
+        const SizedBox(height: 13),
+        OutlinedButton.icon(
+            onPressed: _saving ? null : _change,
+            icon: const Icon(Icons.edit_calendar_outlined, size: 18),
+            label: Text(_saving ? '변경 중...' : '집합 시간 변경'))
+      ]));
 }
 
 class _VoteSelector extends StatelessWidget {

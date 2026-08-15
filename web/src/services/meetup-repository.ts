@@ -58,6 +58,11 @@ export async function confirmSchedule(meetupId: string, slotId: string) {
   trackAnalyticsEvent("schedule_confirmed");
 }
 
+export async function updateConfirmedSchedule(meetupId: string, confirmedDateTime: string) {
+  await callable<{ meetupId: string; confirmedDateTime: string }, { status: string; confirmedDateTime: string; routesReset: number }>("updateConfirmedSchedule")({ meetupId, confirmedDateTime });
+  trackAnalyticsEvent("schedule_updated");
+}
+
 export async function searchPlaces(query: string): Promise<Location[]> {
   await ensureAnonymousUser();
   const response = await callable<{ query: string }, { places: Location[] }>("searchPlaces")({ query });

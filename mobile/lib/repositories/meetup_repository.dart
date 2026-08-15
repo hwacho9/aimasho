@@ -9,6 +9,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../models/meetup.dart';
+import '../services/analytics.dart';
 import '../services/firebase_bootstrap.dart';
 
 class MeetupRepository {
@@ -78,7 +79,10 @@ class MeetupRepository {
           candidateSlots.map((slot) => slot.toUtc().toIso8601String()).toList(),
       if (roomId != null) 'roomId': roomId,
     });
-    return Map<String, dynamic>.from(result.data as Map)['meetupId'] as String;
+    final meetupId =
+        Map<String, dynamic>.from(result.data as Map)['meetupId'] as String;
+    AppAnalytics.log('meetup_created');
+    return meetupId;
   }
 
   Future<InvitePreview> getInvitePreview(String meetupId) async {
@@ -99,6 +103,7 @@ class MeetupRepository {
     await _functions
         .httpsCallable('joinMeetup')
         .call({'meetupId': meetupId, 'displayName': displayName});
+    AppAnalytics.log('meetup_joined');
   }
 
   Future<void> submitVote(
@@ -126,9 +131,39 @@ class MeetupRepository {
         ranking: ranking);
   }
 
-  Future<void> confirmSchedule(String meetupId, String slotId) => _functions
-      .httpsCallable('confirmSchedule')
-      .call({'meetupId': meetupId, 'slotId': slotId});
+  Future<List<RelationshipStat>> meetupRelationships(String meetupId) async {
+    final result = await _functions
+        .httpsCallable('getMeetupRelationships')
+        .call({'meetupId': meetupId});
+    final data = Map<String, dynamic>.from(result.data as Map);
+    return (data['relationships'] as List<dynamic>)
+        .map((item) => _relationship(Map<String, dynamic>.from(item as Map)))
+        .toList();
+  }
+
+  Future<List<RelationshipStat>> myRelationships() async {
+    final result = await _functions.httpsCallable('getMyRelationships').call();
+    final data = Map<String, dynamic>.from(result.data as Map);
+    return (data['relationships'] as List<dynamic>)
+        .map((item) => _relationship(Map<String, dynamic>.from(item as Map)))
+        .toList();
+  }
+
+  Future<void> confirmSchedule(String meetupId, String slotId) async {
+    await _functions
+        .httpsCallable('confirmSchedule')
+        .call({'meetupId': meetupId, 'slotId': slotId});
+    AppAnalytics.log('schedule_confirmed');
+  }
+
+  Future<void> updateConfirmedSchedule(
+      String meetupId, DateTime confirmedDateTime) async {
+    await _functions.httpsCallable('updateConfirmedSchedule').call({
+      'meetupId': meetupId,
+      'confirmedDateTime': confirmedDateTime.toUtc().toIso8601String(),
+    });
+    AppAnalytics.log('schedule_updated');
+  }
 
   Future<List<Location>> searchPlaces(String query) async {
     final result =
@@ -156,12 +191,20 @@ class MeetupRepository {
         .toList();
   }
 
-  Future<void> confirmMeetingPlace(String meetupId, Location place) =>
-      _functions
-          .httpsCallable('confirmMeetingPlace')
-          .call({'meetupId': meetupId, 'meetingPlace': _locationMap(place)});
-  Future<void> calculateRoutes(String meetupId) =>
-      _functions.httpsCallable('calculateRoutes').call({'meetupId': meetupId});
+  Future<void> confirmMeetingPlace(String meetupId, Location place) async {
+    await _functions
+        .httpsCallable('confirmMeetingPlace')
+        .call({'meetupId': meetupId, 'meetingPlace': _locationMap(place)});
+    AppAnalytics.log('meeting_place_confirmed');
+  }
+
+  Future<void> calculateRoutes(String meetupId) async {
+    await _functions
+        .httpsCallable('calculateRoutes')
+        .call({'meetupId': meetupId});
+    AppAnalytics.log('routes_calculated');
+  }
+
   Future<void> registerDepartureNotifications(String meetupId) async {
     final settings = await FirebaseMessaging.instance
         .requestPermission(alert: true, badge: true, sound: true);
@@ -174,17 +217,43 @@ class MeetupRepository {
   }
 
   Future<void> createExpense(String meetupId,
-          {required String title,
-          required int amount,
-          required String paidByUid,
-          required List<String> participantUids}) =>
-      _functions.httpsCallable('createExpense').call({
-        'meetupId': meetupId,
-        'title': title,
-        'amount': amount,
-        'paidByUid': paidByUid,
-        'participantUids': participantUids
-      });
+      {required String title,
+      required int amount,
+      required String paidByUid,
+      required List<String> participantUids}) async {
+    await _functions.httpsCallable('createExpense').call({
+      'meetupId': meetupId,
+      'title': title,
+      'amount': amount,
+      'paidByUid': paidByUid,
+      'participantUids': participantUids
+    });
+    AppAnalytics.log('expense_created');
+  }
+
+  Future<void> updateExpense(String meetupId, String expenseId,
+      {required String title,
+      required int amount,
+      required String paidByUid,
+      required List<String> participantUids}) async {
+    await _functions.httpsCallable('updateExpense').call({
+      'meetupId': meetupId,
+      'expenseId': expenseId,
+      'title': title,
+      'amount': amount,
+      'paidByUid': paidByUid,
+      'participantUids': participantUids
+    });
+    AppAnalytics.log('expense_updated');
+  }
+
+  Future<void> deleteExpense(String meetupId, String expenseId) async {
+    await _functions
+        .httpsCallable('deleteExpense')
+        .call({'meetupId': meetupId, 'expenseId': expenseId});
+    AppAnalytics.log('expense_deleted');
+  }
+
   Future<Settlement> settlement(String meetupId) async {
     final result = await _functions
         .httpsCallable('calculateSettlementResult')
@@ -215,6 +284,7 @@ class MeetupRepository {
         .httpsCallable('createRoom')
         .call({'name': name, 'displayName': displayName});
     final data = Map<String, dynamic>.from(result.data as Map);
+    AppAnalytics.log('room_created');
     return Room(
         id: data['roomId'] as String,
         name: name,
@@ -239,7 +309,10 @@ class MeetupRepository {
     final result = await _functions
         .httpsCallable('joinRoom')
         .call({'inviteCode': inviteCode, 'displayName': displayName});
-    return Map<String, dynamic>.from(result.data as Map)['roomId'] as String;
+    final roomId =
+        Map<String, dynamic>.from(result.data as Map)['roomId'] as String;
+    AppAnalytics.log('room_joined');
+    return roomId;
   }
 
   Future<Map<String, String>> roomInvitePreview(String inviteCode) async {
@@ -376,6 +449,11 @@ class MeetupRepository {
           no: data['no'] as int,
           totalScore: data['totalScore'] as int,
           participantCount: data['participantCount'] as int);
+  RelationshipStat _relationship(Map<String, dynamic> data) => RelationshipStat(
+      otherUid: data['otherUid'] as String,
+      displayName: data['displayName'] as String,
+      sharedMeetupCount: (data['sharedMeetupCount'] as num).toInt(),
+      lastMeetupId: data['lastMeetupId'] as String?);
   Location _location(Map<String, dynamic> data) => Location(
       placeId: data['placeId'] as String,
       name: data['name'] as String,
