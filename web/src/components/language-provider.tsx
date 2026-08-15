@@ -55,6 +55,7 @@ const headerTitles = {
   meetup: { ko: "함께 만나는 약속", ja: "みんなで会う予定" },
   newMeetup: { ko: "새 약속", ja: "新しい予定" },
   profile: { ko: "내 계정", ja: "マイアカウント" },
+  login: { ko: "로그인", ja: "ログイン" },
   room: { ko: "그룹", ja: "グループ" },
   roomInvite: { ko: "그룹 초대", ja: "グループ招待" },
 } as const;

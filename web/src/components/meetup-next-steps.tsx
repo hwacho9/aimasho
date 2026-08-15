@@ -1,15 +1,15 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { beginLocationSelection, calculateRoutes, confirmMeetingPlace, createExpense, getMeetingPointRecommendations, getSettlement, saveOrigin, searchPlaces } from "@/services/meetup-repository";
-import type { Location, MeetingPointCandidate, MeetupDetail, Settlement } from "@/types/meetup";
+import { beginLocationSelection, calculateRoutes, confirmMeetingPlace, createExpense, deleteExpense, getMeetingPointRecommendations, getSettlement, saveOrigin, searchPlaces, updateExpense } from "@/services/meetup-repository";
+import type { Expense, Location, MeetingPointCandidate, MeetupDetail, Settlement } from "@/types/meetup";
 import { useLanguage } from "./language-provider";
 
 function PlaceSearch({ onPick, label }: { onPick: (place: Location) => void; label?: string }) {
   const { language } = useLanguage(); const korean = language === "ko";
-  const [query, setQuery] = useState(""); const [places, setPlaces] = useState<Location[]>([]); const [searching, setSearching] = useState(false);
-  const submit = async (event: FormEvent) => { event.preventDefault(); if (!query.trim()) return; setSearching(true); try { setPlaces(await searchPlaces(query)); } finally { setSearching(false); } };
-  return <div className="place-search"><form onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={label ?? (korean ? "역 / 장소 / 주소 검색" : "駅・場所・住所を検索")} /><button type="submit" disabled={searching}>{searching ? korean ? "검색 중" : "検索中" : korean ? "검색" : "検索"}</button></form>{places.length > 0 && <div className="place-results">{places.map((place) => <button type="button" key={place.placeId} onClick={() => { onPick(place); setPlaces([]); }}><strong>{place.name}</strong><small>{place.address}</small></button>)}</div>}</div>;
+  const [query, setQuery] = useState(""); const [places, setPlaces] = useState<Location[]>([]); const [searching, setSearching] = useState(false); const [error, setError] = useState<string>();
+  const submit = async (event: FormEvent) => { event.preventDefault(); if (!query.trim()) return; setSearching(true); setError(undefined); try { setPlaces(await searchPlaces(query)); } catch { setPlaces([]); setError(korean ? "장소를 검색하지 못했어요. Google Places 서버 키와 결제·API 설정을 확인해 주세요." : "場所を検索できませんでした。Google Places のサーバーキー、課金、API 設定を確認してください。"); } finally { setSearching(false); } };
+  return <div className="place-search"><form onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={label ?? (korean ? "역 / 장소 / 주소 검색" : "駅・場所・住所を検索")} /><button type="submit" disabled={searching}>{searching ? korean ? "검색 중" : "検索中" : korean ? "검색" : "検索"}</button></form>{error && <p className="error-message">{error}</p>}{places.length > 0 && <div className="place-results">{places.map((place) => <button type="button" key={place.placeId} onClick={() => { onPick(place); setPlaces([]); }}><strong>{place.name}</strong><small>{place.address}</small></button>)}</div>}</div>;
 }
 
 function OriginStep({ meetupId, detail, currentUid, isHost, onChanged }: { meetupId: string; detail: MeetupDetail; currentUid?: string; isHost: boolean; onChanged: () => void }) {
@@ -37,11 +37,102 @@ function RoutesStep({ meetupId, detail, isHost, uid, onChanged }: { meetupId: st
 }
 
 function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: MeetupDetail; uid?: string }) {
-  const { language, locale } = useLanguage(); const korean = language === "ko"; const yen = (value: number) => new Intl.NumberFormat(locale, { style: "currency", currency: "JPY", maximumFractionDigits: 0 }).format(value);
-  const [title, setTitle] = useState(""); const [amount, setAmount] = useState(""); const [paidByUid, setPaidByUid] = useState(uid ?? ""); const [sharers, setSharers] = useState<string[]>(detail.participants.map((participant) => participant.uid)); const [saving, setSaving] = useState(false); const [settlement, setSettlement] = useState<Settlement>(); const [error, setError] = useState<string>(); const names = useMemo(() => new Map(detail.participants.map((participant) => [participant.uid, participant.displayName])), [detail.participants]);
-  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setError(undefined); try { await createExpense(meetupId, { title, amount: Number(amount), paidByUid, participantUids: sharers }); setTitle(""); setAmount(""); setSettlement(await getSettlement(meetupId)); } catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "비용을 등록하지 못했어요." : "支出を登録できませんでした。"); } finally { setSaving(false); } };
-  const refresh = async () => { try { setSettlement(await getSettlement(meetupId)); } catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "정산을 계산하지 못했어요." : "精算を計算できませんでした。"); } };
-  return <section className="next-step expenses-step"><p className="eyebrow">{korean ? "정산" : "精算"}</p><h2>{korean ? "정산하기" : "精算する"}</h2><p className="step-copy">{korean ? "송금은 직접 진행하고, aimasho는 가장 간단한 정산 경로를 알려드려요." : "送金は直接行い、aimashoは最もシンプルな精算方法を案内します。"}</p><form className="expense-form" onSubmit={submit}><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={korean ? "항목 · 예: 저녁" : "項目・例：夕食"} required /><input type="number" min="1" step="1" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={korean ? "금액 (¥)" : "金額 (¥)"} required /><select value={paidByUid} onChange={(event) => setPaidByUid(event.target.value)}>{detail.participants.map((participant) => <option key={participant.uid} value={participant.uid}>{participant.displayName}{korean ? " 결제" : "が支払い"}</option>)}</select><div className="sharer-list">{detail.participants.map((participant) => <label key={participant.uid}><input type="checkbox" checked={sharers.includes(participant.uid)} onChange={() => setSharers((current) => current.includes(participant.uid) ? current.filter((id) => id !== participant.uid) : [...current, participant.uid])} /> {participant.displayName}</label>)}</div><button className="secondary-button" type="submit" disabled={saving || sharers.length === 0}>{saving ? korean ? "등록 중..." : "登録中…" : korean ? "비용 추가" : "支出を追加"}</button></form>{detail.expenses.length > 0 && <div className="expense-list">{detail.expenses.map((expense) => <p key={expense.id}><span>{expense.title}<small>{names.get(expense.paidByUid)}{korean ? ` 결제 · ${expense.participantUids.length}명` : `が支払い · ${expense.participantUids.length}人`}</small></span><b>{yen(expense.amount)}</b></p>)}</div>}<button className="primary-button" onClick={() => void refresh()} disabled={detail.expenses.length === 0}>{korean ? "정산 결과 보기" : "精算結果を見る"}</button>{settlement && <div className="settlement-result"><h3>{korean ? "총" : "合計"} {yen(settlement.totalAmount)}</h3>{settlement.transfers.length === 0 ? <p>{korean ? "모두 정산되었어요!" : "精算は完了しています！"}</p> : settlement.transfers.map((transfer) => <p key={`${transfer.fromUid}-${transfer.toUid}`}><b>{names.get(transfer.fromUid)}</b> → <b>{names.get(transfer.toUid)}</b><span>{yen(transfer.amount)}</span></p>)}</div>}{error && <p className="error-message">{error}</p>}</section>;
+  const { language, locale } = useLanguage();
+  const korean = language === "ko";
+  const yen = (value: number) => new Intl.NumberFormat(locale, { style: "currency", currency: "JPY", maximumFractionDigits: 0 }).format(value);
+  const defaultPayer = uid ?? detail.participants[0]?.uid ?? "";
+  const [title, setTitle] = useState("");
+  const [amount, setAmount] = useState("");
+  const [paidByUid, setPaidByUid] = useState(defaultPayer);
+  const [sharers, setSharers] = useState<string[]>(detail.participants.map((participant) => participant.uid));
+  const [editingExpense, setEditingExpense] = useState<Expense>();
+  const [saving, setSaving] = useState(false);
+  const [settlement, setSettlement] = useState<Settlement>();
+  const [error, setError] = useState<string>();
+  const names = useMemo(() => new Map(detail.participants.map((participant) => [participant.uid, participant.displayName])), [detail.participants]);
+
+  const clearForm = () => {
+    setEditingExpense(undefined);
+    setTitle("");
+    setAmount("");
+    setPaidByUid(defaultPayer);
+    setSharers(detail.participants.map((participant) => participant.uid));
+  };
+  const startEditing = (expense: Expense) => {
+    setEditingExpense(expense);
+    setTitle(expense.title);
+    setAmount(String(expense.amount));
+    setPaidByUid(expense.paidByUid);
+    setSharers(expense.participantUids);
+    setError(undefined);
+  };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError(undefined);
+    try {
+      const input = { title, amount: Number(amount), paidByUid, participantUids: sharers };
+      if (editingExpense) await updateExpense(meetupId, editingExpense.id, input);
+      else await createExpense(meetupId, input);
+      clearForm();
+      setSettlement(await getSettlement(meetupId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : korean ? "비용을 저장하지 못했어요." : "支出を保存できませんでした。");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async (expense: Expense) => {
+    const confirmed = window.confirm(korean ? `‘${expense.title}’ 지출을 삭제할까요?` : `「${expense.title}」の支出を削除しますか？`);
+    if (!confirmed) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      await deleteExpense(meetupId, expense.id);
+      if (editingExpense?.id === expense.id) clearForm();
+      setSettlement(await getSettlement(meetupId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : korean ? "비용을 삭제하지 못했어요." : "支出を削除できませんでした。");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const refresh = async () => {
+    try {
+      setSettlement(await getSettlement(meetupId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : korean ? "정산을 계산하지 못했어요." : "精算を計算できませんでした。");
+    }
+  };
+
+  return <section className="next-step expenses-step">
+    <p className="eyebrow">{korean ? "정산" : "精算"}</p>
+    <h2>{korean ? "정산하기" : "精算する"}</h2>
+    <p className="step-copy">{korean ? "송금은 직접 진행하고, aimasho는 가장 간단한 정산 경로를 알려드려요." : "送金は直接行い、aimashoは最もシンプルな精算方法を案内します。"}</p>
+    <p className="inline-note">{korean ? "등록한 지출은 등록한 사람만 수정하거나 삭제할 수 있어요." : "登録した支出は、登録した本人だけが編集・削除できます。"}</p>
+    {editingExpense && <p className="editing-note">{korean ? `‘${editingExpense.title}’ 수정 중` : `「${editingExpense.title}」を編集中`}</p>}
+    <form className="expense-form" onSubmit={submit}>
+      <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={korean ? "항목 · 예: 저녁" : "項目・例：夕食"} required />
+      <input type="number" min="1" step="1" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={korean ? "금액 (¥)" : "金額 (¥)"} required />
+      <select value={paidByUid} onChange={(event) => setPaidByUid(event.target.value)}>{detail.participants.map((participant) => <option key={participant.uid} value={participant.uid}>{participant.displayName}{korean ? " 결제" : "が支払い"}</option>)}</select>
+      <div className="sharer-list">{detail.participants.map((participant) => <label key={participant.uid}><input type="checkbox" checked={sharers.includes(participant.uid)} onChange={() => setSharers((current) => current.includes(participant.uid) ? current.filter((id) => id !== participant.uid) : [...current, participant.uid])} /> {participant.displayName}</label>)}</div>
+      <div className="expense-form-actions">
+        <button className="secondary-button" type="submit" disabled={saving || sharers.length === 0}>{saving ? korean ? "저장 중..." : "保存中…" : editingExpense ? korean ? "지출 수정 저장" : "変更を保存" : korean ? "비용 추가" : "支出を追加"}</button>
+        {editingExpense && <button className="text-button" type="button" onClick={clearForm} disabled={saving}>{korean ? "취소" : "キャンセル"}</button>}
+      </div>
+    </form>
+    {detail.expenses.length > 0 && <div className="expense-list">{detail.expenses.map((expense) => {
+      const canManage = expense.createdByUid === uid;
+      return <article className="expense-item" key={expense.id}>
+        <span><strong>{expense.title}</strong><small>{names.get(expense.paidByUid)}{korean ? ` 결제 · ${expense.participantUids.length}명` : `が支払い · ${expense.participantUids.length}人`}</small></span>
+        <b>{yen(expense.amount)}</b>
+        {canManage && <span className="expense-actions"><button className="text-button" type="button" onClick={() => startEditing(expense)} disabled={saving}>{korean ? "수정" : "編集"}</button><button className="text-button danger-button" type="button" onClick={() => void remove(expense)} disabled={saving}>{korean ? "삭제" : "削除"}</button></span>}
+      </article>;
+    })}</div>}
+    <button className="primary-button" onClick={() => void refresh()} disabled={detail.expenses.length === 0}>{korean ? "정산 결과 보기" : "精算結果を見る"}</button>
+    {settlement && <div className="settlement-result"><h3>{korean ? "총" : "合計"} {yen(settlement.totalAmount)}</h3>{settlement.transfers.length === 0 ? <p>{korean ? "모두 정산되었어요!" : "精算は完了しています！"}</p> : settlement.transfers.map((transfer) => <p key={`${transfer.fromUid}-${transfer.toUid}`}><b>{names.get(transfer.fromUid)}</b> → <b>{names.get(transfer.toUid)}</b><span>{yen(transfer.amount)}</span></p>)}</div>}
+    {error && <p className="error-message">{error}</p>}
+  </section>;
 }
 
 export function MeetupNextSteps({ meetupId, detail, currentUid, isHost, onChanged }: { meetupId: string; detail: MeetupDetail; currentUid?: string; isHost: boolean; onChanged: () => void }) {

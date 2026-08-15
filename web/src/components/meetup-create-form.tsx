@@ -37,7 +37,7 @@ export function MeetupCreateForm({ roomId }: { roomId?: string }) {
 
   return <form className="stack-lg" onSubmit={submit}>
     {roomId && <p className="room-context">{korean ? "이 그룹의 멤버가 자동으로 약속에 참여해요." : "このグループのメンバーが自動的に予定へ参加します。"}</p>}
-    <label className="field small-field"><span>{korean ? "내 이름" : "あなたの名前"}</span><input value={hostName} onChange={(event) => setHostName(event.target.value)} maxLength={60} placeholder={korean ? "예: 성화" : "例：ソンファ"} required /></label>
+    <label className="field small-field"><span>{korean ? "내 이름" : "あなたの名前"}</span><input value={hostName} onChange={(event) => setHostName(event.target.value)} maxLength={60} placeholder={korean ? "예: 민수" : "例：たなか"} required /></label>
     <label className="field"><span>{korean ? "약속 이름" : "予定の名前"}</span><input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder={korean ? "예: 친구들과 저녁" : "例：大学の友だちと夜ごはん"} required /></label>
     <label className="field"><span>{korean ? <>한마디 <em>선택</em></> : <>ひとこと <em>任意</em></>}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} placeholder={korean ? "무엇을 할까요?" : "何をしますか？"} rows={3} /></label>
     <label className="field small-field"><span>{korean ? "예상 약속 시간" : "予定時間"}</span><select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}><option value={60}>{korean ? "1시간" : "1時間"}</option><option value={90}>{korean ? "1시간 30분" : "1時間30分"}</option><option value={120}>{korean ? "2시간" : "2時間"}</option><option value={180}>{korean ? "3시간" : "3時間"}</option><option value={240}>{korean ? "4시간" : "4時間"}</option></select></label>

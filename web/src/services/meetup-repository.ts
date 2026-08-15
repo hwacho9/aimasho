@@ -3,8 +3,8 @@
 import { updateProfile } from "firebase/auth";
 import { collection, doc, onSnapshot, orderBy, query } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { ensureAnonymousUser, firebase } from "@/lib/firebase/client";
-import type { AvailabilityVote, CandidateSlot, Expense, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, Recommendation, Room, Settlement, VoteStatus } from "@/types/meetup";
+import { ensureAnonymousUser, firebase, trackAnalyticsEvent } from "@/lib/firebase/client";
+import type { AvailabilityVote, CandidateSlot, Expense, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, Recommendation, RelationshipStat, Room, Settlement, VoteStatus } from "@/types/meetup";
 
 const callable = <Input, Output>(name: string) => httpsCallable<Input, Output>(firebase().functions, name);
 
@@ -26,6 +26,7 @@ export async function createMeetup(input: { hostName: string; title: string; des
   const { hostName, ...values } = input;
   const payload = { ...values, displayName: hostName };
   const response = await callable<typeof payload, { meetupId: string }>("createMeetup")(payload);
+  trackAnalyticsEvent("meetup_created");
   return response.data.meetupId;
 }
 
@@ -38,6 +39,7 @@ export async function getInvitePreview(meetupId: string) {
 export async function joinMeetup(meetupId: string, displayName: string) {
   await identify(displayName);
   await callable<{ meetupId: string; displayName: string }, { meetupId: string }>("joinMeetup")({ meetupId, displayName });
+  trackAnalyticsEvent("meetup_joined");
 }
 
 export async function submitVote(meetupId: string, slotId: string, status: VoteStatus) {
@@ -53,6 +55,7 @@ export async function getRecommendation(meetupId: string): Promise<Recommendatio
 
 export async function confirmSchedule(meetupId: string, slotId: string) {
   await callable<{ meetupId: string; slotId: string }, { status: string }>("confirmSchedule")({ meetupId, slotId });
+  trackAnalyticsEvent("schedule_confirmed");
 }
 
 export async function searchPlaces(query: string): Promise<Location[]> {
@@ -81,16 +84,29 @@ export async function getMeetingPointRecommendations(meetupId: string, mode: "FA
 
 export async function confirmMeetingPlace(meetupId: string, meetingPlace: Location) {
   await callable<{ meetupId: string; meetingPlace: Location }, { meetingPlace: Location }>("confirmMeetingPlace")({ meetupId, meetingPlace });
+  trackAnalyticsEvent("meeting_place_confirmed");
 }
 
 export async function calculateRoutes(meetupId: string) {
   const response = await callable<{ meetupId: string }, { routes: ParticipantRoute[]; targetArrivalTime: string }>("calculateRoutes")({ meetupId });
+  trackAnalyticsEvent("routes_calculated");
   return response.data;
 }
 
 export async function createExpense(meetupId: string, input: { title: string; amount: number; paidByUid: string; participantUids: string[] }) {
   const response = await callable<{ meetupId: string } & typeof input, { expenseId: string }>("createExpense")({ meetupId, ...input });
+  trackAnalyticsEvent("expense_created");
   return response.data.expenseId;
+}
+
+export async function updateExpense(meetupId: string, expenseId: string, input: { title: string; amount: number; paidByUid: string; participantUids: string[] }) {
+  await callable<{ meetupId: string; expenseId: string } & typeof input, { expenseId: string }>("updateExpense")({ meetupId, expenseId, ...input });
+  trackAnalyticsEvent("expense_updated");
+}
+
+export async function deleteExpense(meetupId: string, expenseId: string) {
+  await callable<{ meetupId: string; expenseId: string }, { expenseId: string }>("deleteExpense")({ meetupId, expenseId });
+  trackAnalyticsEvent("expense_deleted");
 }
 
 export async function getSettlement(meetupId: string): Promise<Settlement> {
@@ -103,12 +119,23 @@ export async function saveProfile(displayName: string) {
   return response.data;
 }
 
+export async function getMeetupRelationships(meetupId: string): Promise<RelationshipStat[]> {
+  const response = await callable<{ meetupId: string }, { relationships: RelationshipStat[] }>("getMeetupRelationships")({ meetupId });
+  return response.data.relationships;
+}
+
+export async function getMyRelationships(): Promise<RelationshipStat[]> {
+  const response = await callable<Record<string, never>, { relationships: RelationshipStat[] }>("getMyRelationships")({});
+  return response.data.relationships;
+}
+
 export async function saveDefaultOrigin(defaultOrigin: Location) {
   await callable<{ defaultOrigin: Location }, { defaultOrigin: Location }>("saveDefaultOrigin")({ defaultOrigin });
 }
 
 export async function createRoom(name: string, displayName: string) {
   const response = await callable<{ name: string; displayName: string }, { roomId: string; inviteCode: string }>("createRoom")({ name, displayName });
+  trackAnalyticsEvent("room_created");
   return response.data;
 }
 
@@ -119,6 +146,7 @@ export async function getMyRooms(): Promise<Room[]> {
 
 export async function joinRoom(inviteCode: string, displayName: string) {
   const response = await callable<{ inviteCode: string; displayName: string }, { roomId: string }>("joinRoom")({ inviteCode, displayName });
+  trackAnalyticsEvent("room_joined");
   return response.data.roomId;
 }
 

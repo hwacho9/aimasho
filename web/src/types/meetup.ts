@@ -22,6 +22,13 @@ export interface Participant {
   originArea?: string;
 }
 
+export interface RelationshipStat {
+  otherUid: string;
+  displayName: string;
+  sharedMeetupCount: number;
+  lastMeetupId: string | null;
+}
+
 export interface AvailabilityVote {
   participantUid: string;
   slotId: string;

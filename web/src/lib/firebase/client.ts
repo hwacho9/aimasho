@@ -1,6 +1,7 @@
 "use client";
 
 import { FirebaseApp, getApp, getApps, initializeApp } from "firebase/app";
+import { getAnalytics, isSupported, logEvent, type Analytics } from "firebase/analytics";
 import { Auth, connectAuthEmulator, getAuth, GoogleAuthProvider, linkWithPopup, signInAnonymously, signInWithPopup, User } from "firebase/auth";
 import { connectFirestoreEmulator, Firestore, getFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, Functions, getFunctions } from "firebase/functions";
@@ -12,6 +13,7 @@ interface FirebaseServices {
 }
 
 let emulatorConnected = false;
+let analyticsPromise: Promise<Analytics | null> | undefined;
 
 // Next.js replaces public environment variables in browser bundles only when
 // they are referenced statically. Do not use process.env[name] here: that
@@ -23,6 +25,7 @@ const publicEnvironment = {
   NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
   NEXT_PUBLIC_USE_FIREBASE_EMULATOR: process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR,
 } as const;
 
@@ -40,6 +43,7 @@ function getAppInstance(): FirebaseApp {
     storageBucket: environment("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET"),
     messagingSenderId: environment("NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID"),
     appId: environment("NEXT_PUBLIC_FIREBASE_APP_ID"),
+    measurementId: publicEnvironment.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
   };
   return getApps().length ? getApp() : initializeApp(config);
 }
@@ -56,6 +60,35 @@ export function firebase(): FirebaseServices {
     emulatorConnected = true;
   }
   return { auth, db, functions };
+}
+
+/**
+ * Analytics is optional so the app remains usable in local Firebase/emulator
+ * setups. It is deliberately disabled for emulators because their test events
+ * should never reach the production Analytics property.
+ */
+export function initializeAnalytics(): Promise<Analytics | null> {
+  const hasFirebaseConfiguration = [
+    publicEnvironment.NEXT_PUBLIC_FIREBASE_API_KEY,
+    publicEnvironment.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    publicEnvironment.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    publicEnvironment.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    publicEnvironment.NEXT_PUBLIC_FIREBASE_APP_ID,
+  ].every(Boolean);
+  if (typeof window === "undefined" || !hasFirebaseConfiguration || !publicEnvironment.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID || publicEnvironment.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === "true") {
+    return Promise.resolve(null);
+  }
+  analyticsPromise ??= isSupported()
+    .then((supported) => supported ? getAnalytics(getAppInstance()) : null)
+    .catch(() => null);
+  return analyticsPromise;
+}
+
+/** Logs product behavior only. Do not pass names, titles, locations, IDs, or amounts. */
+export function trackAnalyticsEvent(name: string): void {
+  void initializeAnalytics().then((analytics) => {
+    if (analytics) logEvent(analytics, name);
+  });
 }
 
 export async function ensureAnonymousUser(): Promise<User> {
