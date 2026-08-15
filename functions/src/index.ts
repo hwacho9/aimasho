@@ -390,26 +390,48 @@ export const calculateScheduleRecommendation = onCall(async (request) => {
 export const confirmSchedule = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
-  const slotId = requireString(request.data?.slotId, "slotId", 128);
+  // The client sends the candidate it was showing, but the server always
+  // recalculates the winner from the latest votes before it confirms anything.
+  // This prevents a stale screen (or a hand-crafted request) from confirming
+  // a different candidate from the actual vote result.
+  requireString(request.data?.slotId, "slotId", 128);
   await requireHost(meetupId, uid);
   const meetup = db.doc(`meetups/${meetupId}`);
-  const slot = db.doc(`meetups/${meetupId}/candidateSlots/${slotId}`);
-  const confirmedDateTime = await db.runTransaction(async (transaction) => {
-    const [meetupSnapshot, slotSnapshot] = await Promise.all([transaction.get(meetup), transaction.get(slot)]);
+  const confirmation = await db.runTransaction(async (transaction) => {
+    const [meetupSnapshot, slotsSnapshot, votesSnapshot, participantsSnapshot] = await Promise.all([
+      transaction.get(meetup),
+      transaction.get(meetup.collection("candidateSlots")),
+      transaction.get(meetup.collection("votes")),
+      transaction.get(meetup.collection("participants")),
+    ]);
     if (!meetupSnapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
-    if (!slotSnapshot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
     if (meetupSnapshot.data()?.status !== "SCHEDULING") {
       throw new HttpsError("failed-precondition", "The schedule has already been confirmed.");
     }
-    const value = slotSnapshot.data()?.startDateTime as Timestamp;
+    const recommendation = rankSchedule(
+      slotsSnapshot.docs.map((slot) => ({
+        id: slot.id,
+        startDateTime: (slot.data().startDateTime as Timestamp).toDate().toISOString(),
+      })),
+      votesSnapshot.docs.map((vote) => ({
+        participantUid: vote.data().participantUid,
+        slotId: vote.data().slotId,
+        status: vote.data().status as VoteStatus,
+      })),
+      participantsSnapshot.size,
+    ).recommended;
+    if (!recommendation) throw new HttpsError("failed-precondition", "At least one candidate slot is required.");
+    const winner = slotsSnapshot.docs.find((slot) => slot.id === recommendation.id);
+    if (!winner) throw new HttpsError("internal", "The recommended candidate slot was not found.");
+    const value = winner.data().startDateTime as Timestamp;
     transaction.update(meetup, {
       status: "SCHEDULE_CONFIRMED" satisfies MeetupStatus,
       confirmedDateTime: value,
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return value.toDate().toISOString();
+    return { slotId: winner.id, confirmedDateTime: value.toDate().toISOString() };
   });
-  return { status: "SCHEDULE_CONFIRMED", confirmedDateTime };
+  return { status: "SCHEDULE_CONFIRMED", ...confirmation };
 });
 
 /**
