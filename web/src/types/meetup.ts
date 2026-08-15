@@ -61,6 +61,7 @@ export interface ParticipantRoute {
   durationMinutes: number;
   transfers: number;
   routeSummary: string;
+  isEstimate?: boolean;
   externalMapsUrl: string;
   departureTime: string;
   arrivalTime: string;

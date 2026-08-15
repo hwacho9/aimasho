@@ -56,6 +56,20 @@ export class MockMapsProvider implements MapsProvider {
   }
 }
 
+function estimatedTransitRoute(origin: Location, destination: Location): RouteResult {
+  const distance = haversineKilometers(origin, destination);
+  // Google Routes occasionally returns an empty 200 response for a transit
+  // request in Japan. Keep the scheduling flow usable, but mark this clearly
+  // as an estimate instead of presenting a made-up transit itinerary.
+  const durationMinutes = Math.max(8, Math.round(8 + (distance / 28) * 60));
+  return {
+    durationMinutes,
+    transfers: 0,
+    routeSummary: `${origin.name} → ${destination.name}`,
+    isEstimate: true,
+  };
+}
+
 interface GoogleRoutesResponse { routes?: Array<{ duration?: string; legs?: Array<{ steps?: unknown[] }> }> }
 
 class GoogleMapsProvider implements MapsProvider {
@@ -86,7 +100,7 @@ class GoogleMapsProvider implements MapsProvider {
     const payload = await response.json() as GoogleRoutesResponse;
     const route = payload.routes?.[0];
     const seconds = Number(route?.duration?.replace("s", ""));
-    if (!Number.isFinite(seconds)) throw new Error("Google Routes returned no route.");
+    if (!Number.isFinite(seconds)) return estimatedTransitRoute(origin, destination);
     return { durationMinutes: Math.max(1, Math.ceil(seconds / 60)), transfers: Math.max(0, (route?.legs?.[0]?.steps?.length ?? 1) - 1), routeSummary: `${origin.name} → ${destination.name}` };
   }
 

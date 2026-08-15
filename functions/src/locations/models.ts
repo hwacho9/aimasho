@@ -10,6 +10,8 @@ export interface RouteResult {
   durationMinutes: number;
   transfers?: number;
   routeSummary?: string;
+  /** True when Google did not return a transit route and a distance estimate is used. */
+  isEstimate?: boolean;
 }
 
 export interface RouteMatrixResult {

@@ -546,9 +546,14 @@ export const getMeetingPointRecommendations = onCall(async (request) => {
   const origins = await participantOrigins(meetupId);
   if (origins.length < 2) throw new HttpsError("failed-precondition", "At least two participants need an origin first.");
   const provider = getMapsProvider();
-  const candidates = await provider.candidatePlaces(geographicCenter(origins.map((item) => item.origin)));
-  const matrix = await provider.calculateMatrix(origins.map((item) => item.origin), candidates);
-  return { mode, candidates: rankMeetingPoints(candidates, matrix.durations, origins.map((item) => item.uid), mode).slice(0, 3) };
+  try {
+    const candidates = await provider.candidatePlaces(geographicCenter(origins.map((item) => item.origin)));
+    const matrix = await provider.calculateMatrix(origins.map((item) => item.origin), candidates);
+    return { mode, candidates: rankMeetingPoints(candidates, matrix.durations, origins.map((item) => item.uid), mode).slice(0, 3) };
+  } catch (caught) {
+    console.error("getMeetingPointRecommendations failed", { meetupId, message: caught instanceof Error ? caught.message : "Unknown Routes API error" });
+    throw new HttpsError("failed-precondition", "Route calculation is temporarily unavailable. Check the Routes API and try again.");
+  }
 });
 
 export const confirmMeetingPlace = onCall(async (request) => {
@@ -576,15 +581,21 @@ export const calculateRoutes = onCall(async (request) => {
   const origins = await participantOrigins(meetupId);
   const provider = getMapsProvider();
   const batch = db.batch();
-  const routes = await Promise.all(origins.map(async ({ uid: participantUid, origin }) => {
-    // Transit routing accepts an arrival time, so every participant's route is
-    // calculated to reach the meeting point by the shared target arrival.
-    const route = await provider.calculateRoute(origin, meetingPlace, targetArrival);
-    const departureTime = new Date(targetArrival.getTime() - route.durationMinutes * 60_000);
-    const item = { participantUid, durationMinutes: route.durationMinutes, transfers: route.transfers ?? 0, routeSummary: route.routeSummary ?? `${origin.name} → ${meetingPlace.name}`, externalMapsUrl: mapsUrl(origin, meetingPlace), departureTime: departureTime.toISOString(), arrivalTime: targetArrival.toISOString() };
-    batch.set(db.doc(`meetups/${meetupId}/routes/${participantUid}`), { ...item, calculatedAt: FieldValue.serverTimestamp() });
-    return item;
-  }));
+  let routes: Array<{ participantUid: string; durationMinutes: number; transfers: number; routeSummary: string; isEstimate: boolean; externalMapsUrl: string; departureTime: string; arrivalTime: string }>;
+  try {
+    routes = await Promise.all(origins.map(async ({ uid: participantUid, origin }) => {
+      // Transit routing accepts an arrival time, so every participant's route is
+      // calculated to reach the meeting point by the shared target arrival.
+      const route = await provider.calculateRoute(origin, meetingPlace, targetArrival);
+      const departureTime = new Date(targetArrival.getTime() - route.durationMinutes * 60_000);
+      const item = { participantUid, durationMinutes: route.durationMinutes, transfers: route.transfers ?? 0, routeSummary: route.routeSummary ?? `${origin.name} → ${meetingPlace.name}`, isEstimate: route.isEstimate === true, externalMapsUrl: mapsUrl(origin, meetingPlace), departureTime: departureTime.toISOString(), arrivalTime: targetArrival.toISOString() };
+      batch.set(db.doc(`meetups/${meetupId}/routes/${participantUid}`), { ...item, calculatedAt: FieldValue.serverTimestamp() });
+      return item;
+    }));
+  } catch (caught) {
+    console.error("calculateRoutes failed", { meetupId, message: caught instanceof Error ? caught.message : "Unknown Routes API error" });
+    throw new HttpsError("failed-precondition", "Route calculation is temporarily unavailable. Check the Routes API and try again.");
+  }
   batch.update(meetup.ref, { status: "READY" satisfies MeetupStatus, targetArrivalTime: Timestamp.fromDate(targetArrival), updatedAt: FieldValue.serverTimestamp() });
   await batch.commit();
   await Promise.all(routes.map((route) => queueDepartureNotification(
