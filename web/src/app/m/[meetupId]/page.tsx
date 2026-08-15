@@ -1,23 +1,42 @@
-"use client";
+import type { Metadata } from "next";
+import { MeetupPageClient } from "@/components/meetup-page-client";
 
-import { useEffect, useState } from "react";
-import { AppHeader, useLanguage } from "@/components/language-provider";
-import { JoinCard } from "@/components/join-card";
-import { MeetupView } from "@/components/meetup-view";
-import { ensureAnonymousUser } from "@/lib/firebase/client";
-import { getInvitePreview } from "@/services/meetup-repository";
-import type { InvitePreview } from "@/types/meetup";
+type PageProps = { params: Promise<{ meetupId: string }> };
 
-export default function MeetupPage({ params }: { params: Promise<{ meetupId: string }> }) {
-  const { language } = useLanguage();
-  const [meetupId, setMeetupId] = useState<string>();
-  const [preview, setPreview] = useState<InvitePreview>();
-  const [joined, setJoined] = useState(false);
-  const [error, setError] = useState<string>();
-  useEffect(() => { void params.then(({ meetupId: id }) => setMeetupId(id)); }, [params]);
-  useEffect(() => {
-    if (!meetupId) return;
-    void (async () => { try { await ensureAnonymousUser(); const invite = await getInvitePreview(meetupId); setPreview(invite); setJoined(invite.isAlreadyParticipant); } catch (caught) { setError(caught instanceof Error ? caught.message : "초대를 불러올 수 없어요."); } })();
-  }, [meetupId]);
-  return <div className="app-shell"><AppHeader title="meetup" />{error ? <main className="loading-page"><p className="error-message">{error}</p></main> : !preview ? <main className="loading-page"><div className="loader" /><p>{language === "ko" ? "초대를 준비하고 있어요..." : "招待を準備しています…"}</p></main> : !joined ? <JoinCard meetupId={preview.meetupId} title={preview.title} hostName={preview.hostName} onJoined={() => setJoined(true)} /> : <MeetupView meetupId={preview.meetupId} />}</div>;
+const defaultDescription = "予定を合わせて、場所を合わせて、会いましょう。";
+
+async function inviteMetadata(meetupId: string): Promise<{ title: string; description: string } | undefined> {
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "aimasho";
+  const endpoint = `https://asia-northeast1-${projectId}.cloudfunctions.net/getPublicMeetupMetadata?meetupId=${encodeURIComponent(meetupId)}`;
+  try {
+    const response = await fetch(endpoint, { next: { revalidate: 300 } });
+    if (!response.ok) return undefined;
+    const value = await response.json() as { title?: unknown; description?: unknown };
+    if (typeof value.title !== "string" || !value.title.trim()) return undefined;
+    return {
+      title: value.title.trim(),
+      description: typeof value.description === "string" && value.description.trim() ? value.description.trim() : defaultDescription,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { meetupId } = await params;
+  const preview = await inviteMetadata(meetupId);
+  if (!preview) return { title: "aimasho", description: defaultDescription };
+  const title = `${preview.title} | aimasho`;
+  return {
+    title,
+    description: preview.description,
+    alternates: { canonical: `/m/${meetupId}` },
+    openGraph: { type: "website", siteName: "aimasho", title, description: preview.description, url: `/m/${meetupId}` },
+    twitter: { card: "summary", title, description: preview.description },
+  };
+}
+
+export default async function MeetupPage({ params }: PageProps) {
+  const { meetupId } = await params;
+  return <MeetupPageClient meetupId={meetupId} />;
 }

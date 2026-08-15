@@ -1,7 +1,7 @@
 import { getApps, initializeApp } from "firebase-admin/app";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
-import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { HttpsError, onCall, onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { rankSchedule } from "./scheduling/ranking.js";
@@ -338,6 +338,28 @@ export const getMeetupInvitePreview = onCall(async (request) => {
     hostName: host.docs[0]?.data().displayName ?? "A friend",
     isAlreadyParticipant: (await meetup.ref.collection("participants").doc(uid).get()).exists,
   };
+});
+
+/**
+ * Small public payload used only for a shared link's Open Graph card. It only
+ * exposes the title the host chose to share, never a description, participants,
+ * votes, origins, or any other meetup state.
+ */
+export const getPublicMeetupMetadata = onRequest({ cors: true }, async (request, response) => {
+  const meetupId = typeof request.query.meetupId === "string" ? request.query.meetupId.trim() : "";
+  if (!meetupId || meetupId.length > 128) {
+    response.status(400).json({ error: "meetupId is invalid" });
+    return;
+  }
+  const meetup = await db.doc(`meetups/${meetupId}`).get();
+  if (!meetup.exists) {
+    response.status(404).json({ error: "Meetup not found" });
+    return;
+  }
+  const data = meetup.data();
+  const title = typeof data?.title === "string" && data.title.trim() ? data.title.trim() : "aimasho meetup";
+  response.set("Cache-Control", "public, max-age=300, s-maxage=300");
+  response.status(200).json({ title });
 });
 
 export const upsertVote = onCall(async (request) => {
