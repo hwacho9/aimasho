@@ -17,7 +17,7 @@ function OriginStep({ meetupId, detail, currentUid, isHost, onChanged }: { meetu
   const [saving, setSaving] = useState(false); const [error, setError] = useState<string>(); const mine = detail.participants.find((participant) => participant.uid === currentUid); const completed = detail.participants.filter((participant) => participant.hasOrigin).length;
   const save = async (origin: Location) => { setSaving(true); setError(undefined); try { await saveOrigin(meetupId, origin); onChanged(); } catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "출발 위치를 저장하지 못했어요." : "出発地を保存できませんでした。"); } finally { setSaving(false); } };
   const proceed = async () => { setSaving(true); try { await beginLocationSelection(meetupId); onChanged(); } catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "장소 선택을 시작하지 못했어요." : "場所選びを開始できませんでした。"); } finally { setSaving(false); } };
-  return <section className="next-step"><p className="eyebrow">{korean ? "1단계 · 출발지" : "ステップ 1 · 出発地"}</p><h2>{korean ? "어디서 출발하나요?" : "どこから出発しますか？"}</h2><p className="step-copy">{korean ? "정확한 위치는 다른 참가자에게 보이지 않으며, 모두에게 좋은 장소와 경로 계산에만 사용돼요." : "正確な位置はほかの参加者には表示されません。みんなに合う場所と経路の計算だけに使います。"}</p>{mine?.hasOrigin ? <div className="saved-location">✓ <strong>{mine.originArea ?? (korean ? "출발 위치" : "出発地")}</strong>{korean ? "에서 출발하는 것으로 저장했어요." : "から出発する設定で保存しました。"}</div> : <PlaceSearch onPick={(place) => void save(place)} />}{saving && <p className="inline-note">{korean ? "위치를 저장하고 있어요..." : "場所を保存しています…"}</p>}{error && <p className="error-message">{error}</p>}<div className="origin-progress"><span>{korean ? "출발 위치 등록" : "出発地の登録"}</span><b>{completed}/{detail.participants.length}{korean ? "명" : "人"}</b></div><div className="origin-names">{detail.participants.map((participant) => <span key={participant.uid} className={participant.hasOrigin ? "ready" : ""}>{participant.hasOrigin ? "✓" : "○"} {participant.displayName}</span>)}</div>{isHost && completed >= 2 && <button className="primary-button proceed-button" onClick={() => void proceed()} disabled={saving}>{korean ? "장소 추천으로 계속" : "場所のおすすめへ進む"}</button>}</section>;
+  return <section className="next-step"><p className="eyebrow">{korean ? "1단계 · 출발지" : "ステップ 1 · 出発地"}</p><h2>{korean ? "어디서 출발하나요?" : "どこから出発しますか？"}</h2><p className="step-copy">{korean ? "정확한 좌표는 공개되지 않지만, 경로 안내에는 선택한 출발지 이름이 참가자에게 표시돼요." : "正確な座標は公開されませんが、経路案内では選んだ出発地名が参加者に表示されます。"}</p>{mine?.hasOrigin ? <div className="saved-location">✓ <strong>{mine.originArea ?? (korean ? "출발 위치" : "出発地")}</strong>{korean ? "에서 출발하는 것으로 저장했어요." : "から出発する設定で保存しました。"}</div> : <PlaceSearch onPick={(place) => void save(place)} />}{saving && <p className="inline-note">{korean ? "위치를 저장하고 있어요..." : "場所を保存しています…"}</p>}{error && <p className="error-message">{error}</p>}<div className="origin-progress"><span>{korean ? "출발 위치 등록" : "出発地の登録"}</span><b>{completed}/{detail.participants.length}{korean ? "명" : "人"}</b></div><div className="origin-names">{detail.participants.map((participant) => <span key={participant.uid} className={participant.hasOrigin ? "ready" : ""}>{participant.hasOrigin ? "✓" : "○"} {participant.displayName}</span>)}</div>{isHost && completed >= 2 && <button className="primary-button proceed-button" onClick={() => void proceed()} disabled={saving}>{korean ? "장소 추천으로 계속" : "場所のおすすめへ進む"}</button>}</section>;
 }
 
 function LocationStep({ meetupId, isHost, onChanged }: { meetupId: string; isHost: boolean; onChanged: () => void }) {
@@ -29,11 +29,50 @@ function LocationStep({ meetupId, isHost, onChanged }: { meetupId: string; isHos
 }
 
 function RoutesStep({ meetupId, detail, isHost, uid, onChanged }: { meetupId: string; detail: MeetupDetail; isHost: boolean; uid?: string; onChanged: () => void }) {
-  const { language, locale } = useLanguage(); const korean = language === "ko"; const clock = (value?: string) => value ? new Intl.DateTimeFormat(locale, { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)) : "—";
-  const [loading, setLoading] = useState(false); const [error, setError] = useState<string>(); const calculate = async () => { setLoading(true); try { await calculateRoutes(meetupId); onChanged(); } catch { setError(korean ? "출발 시간을 계산하지 못했어요. 잠시 후 다시 시도해 주세요." : "出発時間を計算できませんでした。少し待ってからもう一度お試しください。"); } finally { setLoading(false); } };
+  const { language, locale } = useLanguage();
+  const korean = language === "ko";
+  const clock = (value?: string) => value ? new Intl.DateTimeFormat(locale, { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)) : "—";
+  const journey = (route: MeetupDetail["routes"][number]) => route.originName && route.destinationName ? `${route.originName} → ${route.destinationName}` : route.routeSummary;
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>();
+  const calculate = async () => {
+    setLoading(true);
+    try {
+      await calculateRoutes(meetupId);
+      onChanged();
+    } catch {
+      setError(korean ? "출발 시간을 계산하지 못했어요. 잠시 후 다시 시도해 주세요." : "出発時間を計算できませんでした。少し待ってからもう一度お試しください。");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (detail.routes.length === 0) return <section className="next-step"><p className="eyebrow">{korean ? "3단계 · 경로" : "ステップ 3 · 経路"}</p><h2>{korean ? "각자의 출발 시간을 계산할게요" : "みんなの出発時間を計算します"}</h2><p className="step-copy">{korean ? `${detail.meetup.meetingPlace?.name}에 약속 10분 전 도착하도록 맞춰드려요.` : `${detail.meetup.meetingPlace?.name}に予定の10分前に着くように計算します。`}</p>{isHost ? <button className="primary-button" onClick={() => void calculate()} disabled={loading}>{loading ? korean ? "경로 계산 중..." : "経路を計算中…" : korean ? "🚃 출발 시간 계산" : "🚃 出発時間を計算"}</button> : <p className="inline-note">{korean ? "호스트가 경로를 계산하면 여기에서 확인할 수 있어요." : "ホストが経路を計算すると、ここで確認できます。"}</p>}{error && <p className="error-message">{error}</p>}</section>;
+
   const myRoute = detail.routes.find((route) => route.participantUid === uid);
-  return <section className="next-step route-step"><p className="eyebrow">{korean ? "준비 완료" : "準備完了"}</p><h2>{detail.meetup.meetingPlace?.name}{korean ? "에서 만나요" : "で会いましょう"}</h2><p className="target-arrival">{korean ? "목표 도착" : "目標到着"} <b>{clock(detail.meetup.targetArrivalTime)}</b></p>{myRoute && <article className="my-route"><p>🚃 <b>{clock(myRoute.departureTime)}{korean ? "에 출발하세요" : "に出発しましょう"}</b></p><h3>{myRoute.routeSummary}</h3><span>{korean ? `약 ${myRoute.durationMinutes}분 · ${clock(myRoute.arrivalTime)} 도착 예정` : `約${myRoute.durationMinutes}分 · ${clock(myRoute.arrivalTime)} 到着予定`}</span>{myRoute.isEstimate && <small className="map-time-note">{korean ? "Google 대중교통 경로를 받지 못해 거리 기반 예상 시간입니다. Google Maps에서 실제 경로를 확인해 주세요." : "Googleの公共交通経路を取得できなかったため、距離に基づく参考時間です。Google Mapsで実際の経路をご確認ください。"}</small>}<a href={myRoute.externalMapsUrl} target="_blank" rel="noreferrer">{korean ? "Google Maps에서 경로 다시 확인 ↗" : "Google Mapsで経路を再確認 ↗"}</a><small className="map-time-note">{korean ? "Google Maps 링크는 계획된 출발 시각을 전달하지 못해 현재 시각 기준으로 표시될 수 있어요. 출발 시각은 위 안내를 기준으로 해주세요." : "Google Mapsのリンクは予定した出発時刻を渡せないため、現在時刻基準で表示されることがあります。出発時刻は上の案内を基準にしてください。"}</small></article>}<div className="route-list">{detail.routes.map((route) => { const participant = detail.participants.find((item) => item.uid === route.participantUid); return <div key={route.participantUid}><span>{participant?.displayName ?? (korean ? "참가자" : "参加者")}</span><b>{clock(route.departureTime)}</b><span>{korean ? `${route.durationMinutes}분` : `${route.durationMinutes}分`}</span><b>{clock(route.arrivalTime)}</b></div>; })}</div></section>;
+  return <section className="next-step route-step">
+    <p className="eyebrow">{korean ? "준비 완료" : "準備完了"}</p>
+    <h2>{detail.meetup.meetingPlace?.name}{korean ? "에서 만나요" : "で会いましょう"}</h2>
+    <p className="target-arrival">{korean ? "목표 도착" : "目標到着"} <b>{clock(detail.meetup.targetArrivalTime)}</b></p>
+    {isHost && <button className="text-button route-recalculate" type="button" onClick={() => void calculate()} disabled={loading}>{loading ? korean ? "경로 다시 계산 중..." : "経路を再計算中…" : korean ? "경로 다시 계산" : "経路を再計算"}</button>}
+    {myRoute && <article className="my-route">
+      <p>🚃 <b>{myRoute.isEstimate ? korean ? `${clock(myRoute.departureTime)} 예상 출발` : `${clock(myRoute.departureTime)} 参考出発` : korean ? `${clock(myRoute.departureTime)}에 출발하세요` : `${clock(myRoute.departureTime)}に出発しましょう`}</b></p>
+      <h3>{journey(myRoute)}</h3>
+      <span>{myRoute.isEstimate ? korean ? `거리 기반 약 ${myRoute.durationMinutes}분 · ${clock(myRoute.arrivalTime)} 도착 목표` : `距離ベースで約${myRoute.durationMinutes}分 · ${clock(myRoute.arrivalTime)} 到着目標` : korean ? `약 ${myRoute.durationMinutes}분 · ${clock(myRoute.arrivalTime)} 도착 예정` : `約${myRoute.durationMinutes}分 · ${clock(myRoute.arrivalTime)} 到着予定`}</span>
+      {myRoute.isEstimate && <small className="route-estimate-warning">{korean ? "일본 대중교통 시간표를 받을 수 없어 실제 열차 출발시간이 아닙니다. Google Maps에서 목표 도착 시각을 직접 설정해 확인해 주세요." : "日本の公共交通の時刻表を取得できないため、実際の電車の出発時刻ではありません。Google Mapsで目標到着時刻を直接設定して確認してください。"}</small>}
+      <a href={myRoute.externalMapsUrl} target="_blank" rel="noreferrer">{korean ? "Google Maps에서 실제 경로 확인 ↗" : "Google Mapsで実際の経路を確認 ↗"}</a>
+      <small className="map-time-note">{korean ? "Google Maps 링크는 계획한 시각을 전달할 수 없어 ‘지금 출발’로 열립니다. 경로 화면에서 출발 또는 도착 시각을 직접 변경해 주세요." : "Google Mapsのリンクは予定時刻を渡せないため、「現在出発」で開きます。経路画面で出発または到着時刻を直接変更してください。"}</small>
+    </article>}
+    <div className="route-list">{detail.routes.map((route) => {
+      const participant = detail.participants.find((item) => item.uid === route.participantUid);
+      return <div key={route.participantUid}>
+        <span className="route-person"><b>{participant?.displayName ?? (korean ? "참가자" : "参加者")}</b><small>{journey(route)}</small></span>
+        <b>{clock(route.departureTime)}</b>
+        <span>{route.isEstimate ? korean ? `참고 ${route.durationMinutes}분` : `参考 ${route.durationMinutes}分` : korean ? `${route.durationMinutes}분` : `${route.durationMinutes}分`}</span>
+        <b>{clock(route.arrivalTime)}</b>
+      </div>;
+    })}</div>
+  </section>;
 }
 
 function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: MeetupDetail; uid?: string }) {

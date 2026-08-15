@@ -118,7 +118,11 @@ async function validateExpenseParticipants(meetupId: string, expense: ExpensePay
 }
 
 function mapsUrl(origin: Location, destination: Location): string {
-  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(`${origin.latitude},${origin.longitude}`)}&destination=${encodeURIComponent(`${destination.latitude},${destination.longitude}`)}&travelmode=transit`;
+  // Maps URLs cannot carry a planned transit departure or arrival time.  Use
+  // Places IDs, rather than station coordinates, so Google Maps opens the
+  // intended station instead of a nearby rail-track coordinate.
+  const placeId = (value: string) => value.replace(/^places\//, "");
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin.name)}&origin_place_id=${encodeURIComponent(placeId(origin.placeId))}&destination=${encodeURIComponent(destination.name)}&destination_place_id=${encodeURIComponent(placeId(destination.placeId))}&travelmode=transit`;
 }
 
 /**
@@ -628,14 +632,14 @@ export const calculateRoutes = onCall(async (request) => {
   const origins = await participantOrigins(meetupId);
   const provider = getMapsProvider();
   const batch = db.batch();
-  let routes: Array<{ participantUid: string; durationMinutes: number; transfers: number; routeSummary: string; isEstimate: boolean; externalMapsUrl: string; departureTime: string; arrivalTime: string }>;
+  let routes: Array<{ participantUid: string; originName: string; destinationName: string; durationMinutes: number; transfers: number; routeSummary: string; isEstimate: boolean; externalMapsUrl: string; departureTime: string; arrivalTime: string }>;
   try {
     routes = await Promise.all(origins.map(async ({ uid: participantUid, origin }) => {
       // Transit routing accepts an arrival time, so every participant's route is
       // calculated to reach the meeting point by the shared target arrival.
       const route = await provider.calculateRoute(origin, meetingPlace, targetArrival);
       const departureTime = new Date(targetArrival.getTime() - route.durationMinutes * 60_000);
-      const item = { participantUid, durationMinutes: route.durationMinutes, transfers: route.transfers ?? 0, routeSummary: route.routeSummary ?? `${origin.name} → ${meetingPlace.name}`, isEstimate: route.isEstimate === true, externalMapsUrl: mapsUrl(origin, meetingPlace), departureTime: departureTime.toISOString(), arrivalTime: targetArrival.toISOString() };
+      const item = { participantUid, originName: origin.name, destinationName: meetingPlace.name, durationMinutes: route.durationMinutes, transfers: route.transfers ?? 0, routeSummary: route.routeSummary ?? `${origin.name} → ${meetingPlace.name}`, isEstimate: route.isEstimate === true, externalMapsUrl: mapsUrl(origin, meetingPlace), departureTime: departureTime.toISOString(), arrivalTime: targetArrival.toISOString() };
       batch.set(db.doc(`meetups/${meetupId}/routes/${participantUid}`), { ...item, calculatedAt: FieldValue.serverTimestamp() });
       return item;
     }));

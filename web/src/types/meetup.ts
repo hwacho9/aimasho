@@ -61,6 +61,9 @@ export interface Location {
 
 export interface ParticipantRoute {
   participantUid: string;
+  /** Chosen origin name, shared with participants only after route calculation. */
+  originName?: string;
+  destinationName?: string;
   durationMinutes: number;
   transfers: number;
   routeSummary: string;

@@ -55,6 +55,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--coral); box-shad
 @media (max-width: 380px) { .nav-note { display: none; }.flow-strip { gap: 7px; font-size: 10px; }.form-page, .meetup-page, .join-card { width: min(100% - 28px, 650px); }.date-row { grid-template-columns: 23px 1fr 28px; gap: 5px; }.slot-index { width: 22px; height: 22px; }.slot-date { font-size: 14px; } }
 @media (max-width: 500px) { .japanese-headline > strong { white-space: normal; }.japanese-headline > strong > span { display: block; white-space: nowrap; } }
 .map-time-note { display: block; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.route-estimate-warning { display: block; border-radius: 9px; background: #fff8db; padding: 8px 9px; color: #846522; font-size: 11px; line-height: 1.55; }
+.route-person { display: grid; min-width: 0; gap: 2px; }.route-person b { overflow: hidden; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.route-person small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.route-recalculate { justify-self: start; padding: 0; color: var(--coral); font-size: 12px; font-weight: 800; }
 .expense-form-actions { display: flex; align-items: center; gap: 12px; }
 .editing-note { margin: 0; color: var(--coral); font-size: 12px; font-weight: 800; }
 .expense-item { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
