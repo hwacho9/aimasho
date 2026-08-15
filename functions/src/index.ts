@@ -1,0 +1,581 @@
+import { getApps, initializeApp } from "firebase-admin/app";
+import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
+import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { setGlobalOptions } from "firebase-functions/v2";
+import { rankSchedule } from "./scheduling/ranking.js";
+import { getMapsProvider } from "./locations/provider.js";
+import { geographicCenter, rankMeetingPoints } from "./locations/ranking.js";
+import type { Location, MeetingPointMode } from "./locations/models.js";
+import { calculateSettlement, type ExpenseInput } from "./settlement/settlement.js";
+import { createInviteCode } from "./rooms/invite-code.js";
+import type { CandidateSlot, Vote, VoteStatus } from "./shared/models.js";
+
+if (getApps().length === 0) initializeApp();
+
+setGlobalOptions({ region: "asia-northeast1", maxInstances: 10 });
+const db = getFirestore();
+
+type MeetupStatus =
+  | "SCHEDULING"
+  | "SCHEDULE_CONFIRMED"
+  | "LOCATION_COLLECTING"
+  | "LOCATION_SELECTING"
+  | "LOCATION_CONFIRMED"
+  | "READY"
+  | "COMPLETED";
+
+interface CreateMeetupInput {
+  displayName: string;
+  title: string;
+  description?: string;
+  durationMinutes: number;
+  candidateSlots: string[];
+  roomId?: string | null;
+}
+
+type LocationInput = Location;
+
+function requireUid(uid: string | undefined): string {
+  if (!uid) throw new HttpsError("unauthenticated", "Sign in is required.");
+  return uid;
+}
+
+function requireString(value: unknown, field: string, maxLength = 140): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.trim().length > maxLength) {
+    throw new HttpsError("invalid-argument", `${field} is invalid.`);
+  }
+  return value.trim();
+}
+
+function requireVoteStatus(value: unknown): VoteStatus {
+  if (value === "YES" || value === "MAYBE" || value === "NO") return value;
+  throw new HttpsError("invalid-argument", "status must be YES, MAYBE, or NO.");
+}
+
+function parseIsoDate(value: unknown): string {
+  const date = typeof value === "string" ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    throw new HttpsError("invalid-argument", "candidateSlots must contain valid ISO datetimes.");
+  }
+  return date.toISOString();
+}
+
+function requireLocation(value: unknown, field = "location"): LocationInput {
+  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", `${field} is invalid.`);
+  const input = value as Partial<LocationInput>;
+  const name = requireString(input.name, `${field}.name`, 160);
+  const placeId = requireString(input.placeId, `${field}.placeId`, 256);
+  if (typeof input.latitude !== "number" || typeof input.longitude !== "number" || !Number.isFinite(input.latitude) || !Number.isFinite(input.longitude) || Math.abs(input.latitude) > 90 || Math.abs(input.longitude) > 180) {
+    throw new HttpsError("invalid-argument", `${field} coordinates are invalid.`);
+  }
+  return { placeId, name, ...(typeof input.address === "string" ? { address: input.address.slice(0, 300) } : {}), latitude: input.latitude, longitude: input.longitude };
+}
+
+function requireMeetingPointMode(value: unknown): MeetingPointMode {
+  if (value === "FAIR" || value === "FAST") return value;
+  throw new HttpsError("invalid-argument", "mode must be FAIR or FAST.");
+}
+
+function mapsUrl(origin: Location, destination: Location): string {
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(`${origin.latitude},${origin.longitude}`)}&destination=${encodeURIComponent(`${destination.latitude},${destination.longitude}`)}&travelmode=transit`;
+}
+
+/**
+ * Stores a per-meetup notification job only when the participant has opted in
+ * on a device. This keeps FCM tokens and scheduled jobs off the public meetup
+ * document and lets recalculating a route replace a stale departure time.
+ */
+async function queueDepartureNotification(
+  meetupId: string,
+  uid: string,
+  route: { departureTime: string },
+  meetupTitle: string,
+  meetingPlaceName: string,
+): Promise<void> {
+  const device = await db.doc(`users/${uid}/devices/default`).get();
+  const token = device.data()?.token;
+  if (typeof token !== "string" || token.length === 0) return;
+
+  const departureTime = new Date(route.departureTime);
+  if (Number.isNaN(departureTime.getTime())) return;
+  await db.doc(`departureNotifications/${meetupId}_${uid}`).set({
+    meetupId,
+    uid,
+    token,
+    meetupTitle,
+    meetingPlaceName,
+    departureTime: Timestamp.fromDate(departureTime),
+    status: "PENDING",
+    attempts: 0,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function privateOrigin(meetupId: string, uid: string): Promise<Location | null> {
+  const snapshot = await db.doc(`meetups/${meetupId}/privateOrigins/${uid}`).get();
+  return snapshot.exists ? snapshot.data()?.origin as Location : null;
+}
+
+async function participantOrigins(meetupId: string): Promise<Array<{ uid: string; origin: Location }>> {
+  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
+  const origins = await Promise.all(participants.docs.map(async (participant) => ({ uid: participant.id, origin: await privateOrigin(meetupId, participant.id) })));
+  return origins.flatMap((item) => item.origin ? [{ uid: item.uid, origin: item.origin }] : []);
+}
+
+async function requireParticipant(meetupId: string, uid: string) {
+  const participant = await db.doc(`meetups/${meetupId}/participants/${uid}`).get();
+  if (!participant.exists) throw new HttpsError("permission-denied", "You are not a meetup participant.");
+  return participant;
+}
+
+async function requireHost(meetupId: string, uid: string) {
+  const participant = await requireParticipant(meetupId, uid);
+  if (participant.data()?.isHost !== true) {
+    throw new HttpsError("permission-denied", "Only the host can do this.");
+  }
+}
+
+export const createMeetup = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const data = request.data as Partial<CreateMeetupInput>;
+  const title = requireString(data.title, "title", 80);
+  const description = data.description === undefined ? undefined : requireString(data.description, "description", 500);
+  if (!Number.isInteger(data.durationMinutes) || (data.durationMinutes ?? 0) < 30 || (data.durationMinutes ?? 0) > 1440) {
+    throw new HttpsError("invalid-argument", "durationMinutes must be between 30 and 1440.");
+  }
+  if (!Array.isArray(data.candidateSlots) || data.candidateSlots.length === 0 || data.candidateSlots.length > 12) {
+    throw new HttpsError("invalid-argument", "Provide between 1 and 12 candidate slots.");
+  }
+  const candidateSlots = [...new Set(data.candidateSlots.map(parseIsoDate))].sort();
+  const displayName = requireString(data.displayName, "displayName", 60);
+  const roomId = data.roomId === undefined || data.roomId === null ? null : requireString(data.roomId, "roomId", 128);
+  const roomMembers = roomId ? await db.collection(`rooms/${roomId}/members`).get() : null;
+  if (roomId && roomMembers?.empty) throw new HttpsError("not-found", "Room not found.");
+  if (roomId && !roomMembers?.docs.some((member) => member.id === uid)) throw new HttpsError("permission-denied", "You are not a Room member.");
+  const meetup = db.collection("meetups").doc();
+  const now = FieldValue.serverTimestamp();
+  const batch = db.batch();
+
+  batch.set(meetup, {
+    id: meetup.id,
+    roomId,
+    title,
+    ...(description ? { description } : {}),
+    createdByUid: uid,
+    status: "SCHEDULING" satisfies MeetupStatus,
+    durationMinutes: data.durationMinutes,
+    arrivalBufferMinutes: 10,
+    createdAt: now,
+    updatedAt: now,
+  });
+  batch.set(meetup.collection("participants").doc(uid), {
+    uid,
+    displayName,
+    isGuest: request.auth?.token.firebase?.sign_in_provider === "anonymous",
+    isHost: true,
+    joinedAt: now,
+  });
+  for (const member of roomMembers?.docs ?? []) {
+    if (member.id === uid) continue;
+    batch.set(meetup.collection("participants").doc(member.id), {
+      uid: member.id,
+      displayName: member.data().displayName,
+      isGuest: false,
+      isHost: false,
+      joinedAt: now,
+    });
+  }
+  for (const startDateTime of candidateSlots) {
+    const slot = meetup.collection("candidateSlots").doc();
+    batch.set(slot, { id: slot.id, startDateTime: Timestamp.fromDate(new Date(startDateTime)), createdAt: now });
+  }
+  await batch.commit();
+  return { meetupId: meetup.id };
+});
+
+export const joinMeetup = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const displayName = requireString(request.data?.displayName, "displayName", 60);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  if (!(await meetup.get()).exists) throw new HttpsError("not-found", "Meetup not found.");
+  const participant = meetup.collection("participants").doc(uid);
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(participant);
+    if (existing.exists && existing.data()?.isHost === true) return;
+    transaction.set(participant, {
+      uid,
+      displayName,
+      isGuest: request.auth?.token.firebase?.sign_in_provider === "anonymous",
+      isHost: false,
+      joinedAt: existing.data()?.joinedAt ?? FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+  return { meetupId };
+});
+
+/** The small, intentionally non-sensitive payload rendered before a guest joins. */
+export const getMeetupInvitePreview = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const meetup = await db.doc(`meetups/${meetupId}`).get();
+  if (!meetup.exists) throw new HttpsError("not-found", "Meetup not found.");
+  const host = await meetup.ref.collection("participants").where("isHost", "==", true).limit(1).get();
+  return {
+    meetupId,
+    title: meetup.data()?.title,
+    description: meetup.data()?.description ?? null,
+    status: meetup.data()?.status,
+    hostName: host.docs[0]?.data().displayName ?? "A friend",
+    isAlreadyParticipant: (await meetup.ref.collection("participants").doc(uid).get()).exists,
+  };
+});
+
+export const upsertVote = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const slotId = requireString(request.data?.slotId, "slotId", 128);
+  const status = requireVoteStatus(request.data?.status);
+  await requireParticipant(meetupId, uid);
+  const slot = await db.doc(`meetups/${meetupId}/candidateSlots/${slotId}`).get();
+  if (!slot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
+  await db.doc(`meetups/${meetupId}/votes/${uid}_${slotId}`).set({
+    participantUid: uid,
+    slotId,
+    status,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return { ok: true };
+});
+
+export const calculateScheduleRecommendation = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireParticipant(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const [participants, slots, votes] = await Promise.all([
+    meetup.collection("participants").get(),
+    meetup.collection("candidateSlots").get(),
+    meetup.collection("votes").get(),
+  ]);
+  const slotModels: CandidateSlot[] = slots.docs.map((slot) => ({
+    id: slot.id,
+    startDateTime: slot.data().startDateTime.toDate().toISOString(),
+  }));
+  const voteModels: Vote[] = votes.docs.map((vote) => ({
+    participantUid: vote.data().participantUid,
+    slotId: vote.data().slotId,
+    status: vote.data().status as VoteStatus,
+  }));
+  return rankSchedule(slotModels, voteModels, participants.size);
+});
+
+export const confirmSchedule = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const slotId = requireString(request.data?.slotId, "slotId", 128);
+  await requireHost(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const slot = db.doc(`meetups/${meetupId}/candidateSlots/${slotId}`);
+  const confirmedDateTime = await db.runTransaction(async (transaction) => {
+    const [meetupSnapshot, slotSnapshot] = await Promise.all([transaction.get(meetup), transaction.get(slot)]);
+    if (!meetupSnapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+    if (!slotSnapshot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
+    if (meetupSnapshot.data()?.status !== "SCHEDULING") {
+      throw new HttpsError("failed-precondition", "The schedule has already been confirmed.");
+    }
+    const value = slotSnapshot.data()?.startDateTime as Timestamp;
+    transaction.update(meetup, {
+      status: "SCHEDULE_CONFIRMED" satisfies MeetupStatus,
+      confirmedDateTime: value,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return value.toDate().toISOString();
+  });
+  return { status: "SCHEDULE_CONFIRMED", confirmedDateTime };
+});
+
+export const searchPlaces = onCall(async (request) => {
+  requireUid(request.auth?.uid);
+  const query = requireString(request.data?.query, "query", 160);
+  const near = request.data?.near ? requireLocation(request.data.near, "near") : undefined;
+  const places = await getMapsProvider().searchPlaces(query, near);
+  return { places };
+});
+
+export const saveOrigin = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const origin = requireLocation(request.data?.origin, "origin");
+  await requireParticipant(meetupId, uid);
+  const meetup = await db.doc(`meetups/${meetupId}`).get();
+  if (!meetup.exists) throw new HttpsError("not-found", "Meetup not found.");
+  if (!["SCHEDULE_CONFIRMED", "LOCATION_COLLECTING", "LOCATION_SELECTING"].includes(meetup.data()?.status)) {
+    throw new HttpsError("failed-precondition", "Origins can be saved only after the schedule is confirmed.");
+  }
+  const batch = db.batch();
+  batch.set(db.doc(`meetups/${meetupId}/privateOrigins/${uid}`), { uid, origin, updatedAt: FieldValue.serverTimestamp() });
+  batch.set(db.doc(`meetups/${meetupId}/participants/${uid}`), { hasOrigin: true, originArea: origin.name, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  if (meetup.data()?.status === "SCHEDULE_CONFIRMED") batch.update(meetup.ref, { status: "LOCATION_COLLECTING" satisfies MeetupStatus, updatedAt: FieldValue.serverTimestamp() });
+  await batch.commit();
+  return { hasOrigin: true, originArea: origin.name };
+});
+
+export const getOriginCollectionStatus = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireParticipant(meetupId, uid);
+  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
+  return { participants: participants.docs.map((participant) => ({ uid: participant.id, displayName: participant.data().displayName, hasOrigin: participant.data().hasOrigin === true, originArea: participant.id === uid ? participant.data().originArea ?? null : null })), completeCount: participants.docs.filter((participant) => participant.data().hasOrigin === true).length };
+});
+
+export const beginLocationSelection = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireHost(meetupId, uid);
+  const origins = await participantOrigins(meetupId);
+  if (origins.length < 2) throw new HttpsError("failed-precondition", "At least two origins are needed to choose a meeting place.");
+  await db.doc(`meetups/${meetupId}`).update({ status: "LOCATION_SELECTING" satisfies MeetupStatus, updatedAt: FieldValue.serverTimestamp() });
+  return { status: "LOCATION_SELECTING" };
+});
+
+export const getMeetingPointRecommendations = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const mode = requireMeetingPointMode(request.data?.mode ?? "FAIR");
+  await requireParticipant(meetupId, uid);
+  const origins = await participantOrigins(meetupId);
+  if (origins.length < 2) throw new HttpsError("failed-precondition", "At least two participants need an origin first.");
+  const provider = getMapsProvider();
+  const candidates = await provider.candidatePlaces(geographicCenter(origins.map((item) => item.origin)));
+  const matrix = await provider.calculateMatrix(origins.map((item) => item.origin), candidates);
+  return { mode, candidates: rankMeetingPoints(candidates, matrix.durations, origins.map((item) => item.uid), mode).slice(0, 3) };
+});
+
+export const confirmMeetingPlace = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const meetingPlace = requireLocation(request.data?.meetingPlace, "meetingPlace");
+  await requireHost(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const snapshot = await meetup.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+  if (!["LOCATION_COLLECTING", "LOCATION_SELECTING", "LOCATION_CONFIRMED", "READY"].includes(snapshot.data()?.status)) throw new HttpsError("failed-precondition", "Confirm the schedule and collect origins first.");
+  await meetup.update({ meetingPlace, status: "LOCATION_CONFIRMED" satisfies MeetupStatus, updatedAt: FieldValue.serverTimestamp() });
+  return { meetingPlace };
+});
+
+export const calculateRoutes = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireParticipant(meetupId, uid);
+  const meetup = await db.doc(`meetups/${meetupId}`).get();
+  const data = meetup.data();
+  if (!meetup.exists || !data?.meetingPlace || !data.confirmedDateTime) throw new HttpsError("failed-precondition", "Meeting place and date must be confirmed first.");
+  const meetingPlace = data.meetingPlace as Location;
+  const targetArrival = new Date((data.confirmedDateTime as Timestamp).toDate().getTime() - (data.arrivalBufferMinutes ?? 10) * 60_000);
+  const origins = await participantOrigins(meetupId);
+  const provider = getMapsProvider();
+  const batch = db.batch();
+  const routes = await Promise.all(origins.map(async ({ uid: participantUid, origin }) => {
+    // Transit routing accepts an arrival time, so every participant's route is
+    // calculated to reach the meeting point by the shared target arrival.
+    const route = await provider.calculateRoute(origin, meetingPlace, targetArrival);
+    const departureTime = new Date(targetArrival.getTime() - route.durationMinutes * 60_000);
+    const item = { participantUid, durationMinutes: route.durationMinutes, transfers: route.transfers ?? 0, routeSummary: route.routeSummary ?? `${origin.name} → ${meetingPlace.name}`, externalMapsUrl: mapsUrl(origin, meetingPlace), departureTime: departureTime.toISOString(), arrivalTime: targetArrival.toISOString() };
+    batch.set(db.doc(`meetups/${meetupId}/routes/${participantUid}`), { ...item, calculatedAt: FieldValue.serverTimestamp() });
+    return item;
+  }));
+  batch.update(meetup.ref, { status: "READY" satisfies MeetupStatus, targetArrivalTime: Timestamp.fromDate(targetArrival), updatedAt: FieldValue.serverTimestamp() });
+  await batch.commit();
+  await Promise.all(routes.map((route) => queueDepartureNotification(
+    meetupId,
+    route.participantUid,
+    route,
+    data.title as string,
+    meetingPlace.name,
+  )));
+  return { meetingPlace, targetArrivalTime: targetArrival.toISOString(), routes };
+});
+
+/** Registers the caller's current device for their own calculated departure. */
+export const registerDeviceToken = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const token = requireString(request.data?.token, "token", 4096);
+  await requireParticipant(meetupId, uid);
+  await db.doc(`users/${uid}/devices/default`).set({
+    token,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  const [meetup, route] = await Promise.all([
+    db.doc(`meetups/${meetupId}`).get(),
+    db.doc(`meetups/${meetupId}/routes/${uid}`).get(),
+  ]);
+  const meetupData = meetup.data();
+  if (route.exists && meetupData?.meetingPlace) {
+    await queueDepartureNotification(
+      meetupId,
+      uid,
+      route.data() as { departureTime: string },
+      meetupData.title as string,
+      (meetupData.meetingPlace as Location).name,
+    );
+  }
+  return { registered: true };
+});
+
+/** Delivers due departure reminders. Deploying this function requires Cloud Scheduler. */
+export const sendDepartureNotifications = onSchedule("every 1 minutes", async () => {
+  const due = await db.collection("departureNotifications")
+    .where("status", "==", "PENDING")
+    .where("departureTime", "<=", Timestamp.now())
+    .limit(100)
+    .get();
+
+  await Promise.all(due.docs.map(async (notification) => {
+    const job = await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(notification.ref);
+      const data = current.data();
+      if (!current.exists || data?.status !== "PENDING" || !(data.departureTime instanceof Timestamp) || data.departureTime.toMillis() > Date.now()) return null;
+      transaction.update(notification.ref, {
+        status: "SENDING",
+        attempts: (data.attempts ?? 0) + 1,
+        claimedAt: FieldValue.serverTimestamp(),
+      });
+      return data;
+    });
+    if (!job) return;
+
+    try {
+      await getMessaging().send({
+        token: job.token as string,
+        notification: {
+          title: "🚃 출발할 시간이에요",
+          body: `${job.meetingPlaceName as string}에서 만나요 · ${job.meetupTitle as string}`,
+        },
+        data: { meetupId: job.meetupId as string, type: "departure-reminder" },
+      });
+      await notification.ref.update({ status: "SENT", sentAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+    } catch (error) {
+      const attempts = (job.attempts ?? 0) + 1;
+      const message = error instanceof Error ? error.message.slice(0, 500) : "Unknown FCM error";
+      const invalidToken = /registration-token-not-registered|invalid-registration-token/.test(message);
+      await notification.ref.update({
+        status: invalidToken ? "INVALID_TOKEN" : attempts >= 3 ? "FAILED" : "PENDING",
+        lastError: message,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+  }));
+});
+
+export const createExpense = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const title = requireString(request.data?.title, "title", 120);
+  const amount = request.data?.amount;
+  if (!Number.isInteger(amount) || amount <= 0 || amount > 10_000_000) throw new HttpsError("invalid-argument", "amount must be a positive integer yen amount.");
+  const paidByUid = requireString(request.data?.paidByUid, "paidByUid", 128);
+  const participantUids = request.data?.participantUids;
+  if (!Array.isArray(participantUids) || participantUids.length === 0 || participantUids.some((id) => typeof id !== "string")) throw new HttpsError("invalid-argument", "participantUids is invalid.");
+  await requireParticipant(meetupId, uid);
+  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
+  const participantSet = new Set(participants.docs.map((participant) => participant.id));
+  if (!participantSet.has(paidByUid) || participantUids.some((id) => !participantSet.has(id))) throw new HttpsError("invalid-argument", "Payer and sharers must be participants.");
+  const expense = db.collection(`meetups/${meetupId}/expenses`).doc();
+  await expense.set({ id: expense.id, title, amount, paidByUid, participantUids: [...new Set(participantUids)], createdByUid: uid, createdAt: FieldValue.serverTimestamp() });
+  return { expenseId: expense.id };
+});
+
+export const calculateSettlementResult = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireParticipant(meetupId, uid);
+  const [participants, expenses] = await Promise.all([db.collection(`meetups/${meetupId}/participants`).get(), db.collection(`meetups/${meetupId}/expenses`).get()]);
+  const result = calculateSettlement(participants.docs.map((participant) => participant.id), expenses.docs.map((expense) => expense.data() as ExpenseInput));
+  return result;
+});
+
+export const saveProfile = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const displayName = requireString(request.data?.displayName, "displayName", 60);
+  const accountType = request.auth?.token.firebase?.sign_in_provider === "anonymous" ? "ANONYMOUS" : "REGISTERED";
+  await db.doc(`users/${uid}`).set({ uid, displayName, accountType, updatedAt: FieldValue.serverTimestamp(), createdAt: FieldValue.serverTimestamp() }, { merge: true });
+  return { uid, displayName, accountType };
+});
+
+export const saveDefaultOrigin = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  if (request.auth?.token.firebase?.sign_in_provider === "anonymous") throw new HttpsError("failed-precondition", "Create an account to save a default origin.");
+  const defaultOrigin = requireLocation(request.data?.defaultOrigin, "defaultOrigin");
+  await db.doc(`users/${uid}`).set({ uid, defaultOrigin, updatedAt: FieldValue.serverTimestamp(), createdAt: FieldValue.serverTimestamp() }, { merge: true });
+  return { defaultOrigin };
+});
+
+async function requireRegisteredUser(uid: string, provider: string | undefined): Promise<void> {
+  if (provider === "anonymous") throw new HttpsError("failed-precondition", "Create an account to use Rooms.");
+  const profile = await db.doc(`users/${uid}`).get();
+  if (!profile.exists || profile.data()?.accountType !== "REGISTERED") throw new HttpsError("failed-precondition", "Create an account to use Rooms.");
+}
+
+export const createRoom = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  await requireRegisteredUser(uid, request.auth?.token.firebase?.sign_in_provider);
+  const name = requireString(request.data?.name, "name", 80);
+  const displayName = requireString(request.data?.displayName, "displayName", 60);
+  const room = db.collection("rooms").doc();
+  const inviteCode = createInviteCode();
+  const batch = db.batch();
+  batch.set(room, { id: room.id, name, ownerUid: uid, inviteCode, createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  batch.set(room.collection("members").doc(uid), { uid, displayName, role: "OWNER", joinedAt: FieldValue.serverTimestamp() });
+  await batch.commit();
+  return { roomId: room.id, inviteCode };
+});
+
+export const getRoomInvitePreview = onCall(async (request) => {
+  requireUid(request.auth?.uid);
+  const inviteCode = requireString(request.data?.inviteCode, "inviteCode", 32).toUpperCase();
+  const rooms = await db.collection("rooms").where("inviteCode", "==", inviteCode).limit(1).get();
+  const room = rooms.docs[0];
+  if (!room) throw new HttpsError("not-found", "Room not found.");
+  const owner = await room.ref.collection("members").where("role", "==", "OWNER").limit(1).get();
+  return { roomId: room.id, name: room.data().name, ownerName: owner.docs[0]?.data().displayName ?? "A friend" };
+});
+
+export const joinRoom = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  await requireRegisteredUser(uid, request.auth?.token.firebase?.sign_in_provider);
+  const inviteCode = requireString(request.data?.inviteCode, "inviteCode", 32).toUpperCase();
+  const displayName = requireString(request.data?.displayName, "displayName", 60);
+  const rooms = await db.collection("rooms").where("inviteCode", "==", inviteCode).limit(1).get();
+  const room = rooms.docs[0];
+  if (!room) throw new HttpsError("not-found", "Room not found.");
+  await room.ref.collection("members").doc(uid).set({ uid, displayName, role: "MEMBER", joinedAt: FieldValue.serverTimestamp() }, { merge: true });
+  return { roomId: room.id };
+});
+
+export const getMyRooms = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  await requireRegisteredUser(uid, request.auth?.token.firebase?.sign_in_provider);
+  const memberships = await db.collectionGroup("members").where("uid", "==", uid).get();
+  const rooms = await Promise.all(memberships.docs.map(async (membership) => {
+    const room = await membership.ref.parent.parent?.get();
+    return room?.exists ? { id: room.id, name: room.data()?.name, inviteCode: room.data()?.inviteCode, role: membership.data().role } : null;
+  }));
+  return { rooms: rooms.filter((room): room is NonNullable<typeof room> => room !== null) };
+});
+
+export const getRoomDetail = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const roomId = requireString(request.data?.roomId, "roomId", 128);
+  const room = await db.doc(`rooms/${roomId}`).get();
+  if (!room.exists) throw new HttpsError("not-found", "Room not found.");
+  const membership = await room.ref.collection("members").doc(uid).get();
+  if (!membership.exists) throw new HttpsError("permission-denied", "You are not a Room member.");
+  const [members, meetups] = await Promise.all([room.ref.collection("members").get(), db.collection("meetups").where("roomId", "==", roomId).get()]);
+  return { room: { id: room.id, name: room.data()?.name, inviteCode: room.data()?.inviteCode, ownerUid: room.data()?.ownerUid }, members: members.docs.map((member) => member.data()), meetups: meetups.docs.map((meetup) => ({ id: meetup.id, title: meetup.data().title, status: meetup.data().status, confirmedDateTime: meetup.data().confirmedDateTime?.toDate().toISOString() ?? null })) };
+});

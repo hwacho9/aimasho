@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function participant(meetupId) {
+      return signedIn() && exists(/databases/$(database)/documents/meetups/$(meetupId)/participants/$(request.auth.uid));
+    }
+    match /users/{uid} {
+      allow read, create, update: if signedIn() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    match /meetups/{meetupId} {
+      allow read: if participant(meetupId);
+      // Core state changes are validated by Cloud Functions with Admin SDK.
+      allow create, update: if false;
+      allow delete: if false;
+
+      match /participants/{uid} {
+        allow read: if participant(meetupId);
+        allow create, update: if false;
+        allow delete: if false;
+      }
+
+      match /candidateSlots/{slotId} {
+        allow read: if participant(meetupId);
+        allow create, update, delete: if false;
+      }
+
+      match /votes/{voteId} {
+        allow read: if participant(meetupId);
+        allow create, update: if participant(meetupId) &&
+          request.resource.data.participantUid == request.auth.uid;
+        allow delete: if signedIn() && resource.data.participantUid == request.auth.uid;
+      }
+
+      // Exact origins are private: backend functions read them to calculate
+      // routes, but no participant can read someone else's coordinates.
+      match /privateOrigins/{uid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+
+      match /routes/{uid} {
+        allow read: if participant(meetupId);
+        allow write: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if participant(meetupId);
+        allow write: if false;
+      }
+
+      match /{document=**} {
+        allow read: if participant(meetupId);
+        allow write: if false;
+      }
+    }
+
+    match /rooms/{roomId} {
+      function roomMember() {
+        return signedIn() && exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
+      }
+      allow read: if roomMember();
+      allow write: if false;
+
+      match /members/{uid} {
+        allow read: if roomMember();
+        allow write: if false;
+      }
+    }
+  }
+}

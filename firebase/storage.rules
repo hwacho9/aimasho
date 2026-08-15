@@ -1,0 +1,7 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Storage is intentionally unused during the first milestone.
+    match /{allPaths=**} { allow read, write: if false; }
+  }
+}

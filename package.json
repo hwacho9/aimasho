@@ -1,0 +1,14 @@
+{
+  "name": "aimasho",
+  "private": true,
+  "scripts": {
+    "check": "npm --prefix functions run check && npm --prefix web run check",
+    "test": "npm --prefix functions test && npm --prefix web test",
+    "build": "npm --prefix functions run build && npm --prefix web run build",
+    "emulators": "npm --prefix functions run build && firebase emulators:start",
+    "deploy": "npm --prefix functions run build && firebase deploy"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.26.0"
+  }
+}

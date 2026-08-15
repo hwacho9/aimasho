@@ -1,0 +1,36 @@
+{
+  "name": "@aimasho/functions",
+  "version": "1.0.0",
+  "main": "lib/index.js",
+  "type": "module",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run src",
+    "lint": "eslint src",
+    "check": "npm run lint && npm run build",
+    "serve": "npm run build && firebase emulators:start --only functions"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "firebase-admin": "^14.2.0",
+    "firebase-functions": "^7.3.2"
+  },
+  "overrides": {
+    "jose": "4.15.9"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^26.2.0",
+    "eslint": "^9.39.5",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10"
+  }
+}

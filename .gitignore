@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.dart_tool/
+build/
+functions/lib/
+web/.env.local
+mobile/firebase_options.dart
+mobile/firebase.json
+functions/.env
