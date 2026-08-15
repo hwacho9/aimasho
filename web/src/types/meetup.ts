@@ -20,6 +20,7 @@ export interface Participant {
   isHost: boolean;
   hasOrigin?: boolean;
   originArea?: string;
+  confirmedScheduleAvailability?: VoteStatus;
 }
 
 export interface RelationshipStat {
@@ -43,6 +44,8 @@ export interface Meetup {
   status: MeetupStatus;
   durationMinutes: number;
   confirmedDateTime?: string;
+  previousConfirmedDateTime?: string;
+  scheduleChangedAt?: string;
   meetingPlace?: Location;
   arrivalBufferMinutes?: number;
   targetArrivalTime?: string;

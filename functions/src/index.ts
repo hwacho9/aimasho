@@ -478,11 +478,12 @@ export const updateConfirmedSchedule = onCall(async (request) => {
     throw new HttpsError("failed-precondition", "Completed meetups cannot be changed.");
   }
 
-  const [routes, notifications] = await Promise.all([
+  const [routes, notifications, participants] = await Promise.all([
     meetup.collection("routes").get(),
     db.collection("departureNotifications").where("meetupId", "==", meetupId).get(),
+    meetup.collection("participants").get(),
   ]);
-  if (routes.size + notifications.size > 450) {
+  if (routes.size + notifications.size + participants.size > 450) {
     throw new HttpsError("resource-exhausted", "Too many stale route records to reset at once.");
   }
 
@@ -491,13 +492,19 @@ export const updateConfirmedSchedule = onCall(async (request) => {
     : "SCHEDULE_CONFIRMED";
   const batch = db.batch();
   batch.update(meetup, {
+    previousConfirmedDateTime: meetupSnapshot.data()?.confirmedDateTime ?? FieldValue.delete(),
     confirmedDateTime: Timestamp.fromDate(confirmedDate),
+    scheduleChangedAt: FieldValue.serverTimestamp(),
     status: nextStatus,
     targetArrivalTime: FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp(),
   });
   routes.docs.forEach((route) => batch.delete(route.ref));
   notifications.docs.forEach((notification) => batch.delete(notification.ref));
+  participants.docs.forEach((participant) => batch.update(participant.ref, {
+    confirmedScheduleAvailability: FieldValue.delete(),
+    confirmedScheduleAvailabilityUpdatedAt: FieldValue.delete(),
+  }));
   await batch.commit();
 
   return {
@@ -505,6 +512,24 @@ export const updateConfirmedSchedule = onCall(async (request) => {
     confirmedDateTime: confirmedDate.toISOString(),
     routesReset: routes.size,
   };
+});
+
+/** Lets every participant revise only their own availability for the confirmed schedule. */
+export const updateConfirmedScheduleAvailability = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const status = requireVoteStatus(request.data?.status);
+  const participant = await requireParticipant(meetupId, uid);
+  const meetup = await db.doc(`meetups/${meetupId}`).get();
+  const meetupStatus = meetup.data()?.status as MeetupStatus | undefined;
+  if (!meetup.exists || !meetupStatus || meetupStatus === "SCHEDULING" || meetupStatus === "COMPLETED") {
+    throw new HttpsError("failed-precondition", "A confirmed upcoming schedule is required.");
+  }
+  await participant.ref.set({
+    confirmedScheduleAvailability: status,
+    confirmedScheduleAvailabilityUpdatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return { status };
 });
 
 export const searchPlaces = onCall(async (request) => {

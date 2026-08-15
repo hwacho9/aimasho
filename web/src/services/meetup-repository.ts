@@ -63,6 +63,11 @@ export async function updateConfirmedSchedule(meetupId: string, confirmedDateTim
   trackAnalyticsEvent("schedule_updated");
 }
 
+export async function updateConfirmedScheduleAvailability(meetupId: string, status: VoteStatus) {
+  await callable<{ meetupId: string; status: VoteStatus }, { status: VoteStatus }>("updateConfirmedScheduleAvailability")({ meetupId, status });
+  trackAnalyticsEvent("confirmed_schedule_availability_updated");
+}
+
 export async function searchPlaces(query: string): Promise<Location[]> {
   await ensureAnonymousUser();
   const response = await callable<{ query: string }, { places: Location[] }>("searchPlaces")({ query });
@@ -189,6 +194,8 @@ export function subscribeToMeetup(meetupId: string, onData: (data: MeetupDetail)
         status: item.status,
         durationMinutes: item.durationMinutes,
         confirmedDateTime: dateString(item.confirmedDateTime),
+        previousConfirmedDateTime: dateString(item.previousConfirmedDateTime),
+        scheduleChangedAt: dateString(item.scheduleChangedAt),
         meetingPlace: item.meetingPlace,
         arrivalBufferMinutes: item.arrivalBufferMinutes,
         targetArrivalTime: dateString(item.targetArrivalTime),
