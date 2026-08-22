@@ -17,6 +17,10 @@ if (getApps().length === 0) initializeApp();
 setGlobalOptions({ region: "asia-northeast1", maxInstances: 10 });
 const db = getFirestore();
 
+// Google Maps Platform does not provide Japanese public-transit timetables to
+// this app. Keep the feature off until a timetable provider is connected.
+const DEPARTURE_TIME_FEATURE_ENABLED = false;
+
 type MeetupStatus =
   | "SCHEDULING"
   | "SCHEDULE_CONFIRMED"
@@ -462,8 +466,8 @@ export const confirmSchedule = onCall(async (request) => {
 
 /**
  * Lets the host revise a confirmed date/time. Meeting place and private
- * origins remain intact, while routes and departure notifications are removed
- * because both are tied to the previous arrival time.
+ * origins remain intact, while any legacy routes and departure notifications
+ * are removed.
  */
 export const updateConfirmedSchedule = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
@@ -492,7 +496,7 @@ export const updateConfirmedSchedule = onCall(async (request) => {
   }
 
   const nextStatus: MeetupStatus = meetupSnapshot.data()?.meetingPlace
-    ? "LOCATION_CONFIRMED"
+    ? "READY"
     : "SCHEDULE_CONFIRMED";
   const batch = db.batch();
   batch.update(meetup, {
@@ -616,7 +620,14 @@ export const confirmMeetingPlace = onCall(async (request) => {
   const snapshot = await meetup.get();
   if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
   if (!["LOCATION_COLLECTING", "LOCATION_SELECTING", "LOCATION_CONFIRMED", "READY"].includes(snapshot.data()?.status)) throw new HttpsError("failed-precondition", "Confirm the schedule and collect origins first.");
-  await meetup.update({ meetingPlace, status: "LOCATION_CONFIRMED" satisfies MeetupStatus, updatedAt: FieldValue.serverTimestamp() });
+  // Departure/arrival-time calculation is intentionally disabled for now, so
+  // confirming a place finishes the planning flow without a route step.
+  await meetup.update({
+    meetingPlace,
+    status: "READY" satisfies MeetupStatus,
+    targetArrivalTime: FieldValue.delete(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
   return { meetingPlace };
 });
 
@@ -624,6 +635,9 @@ export const calculateRoutes = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
   await requireParticipant(meetupId, uid);
+  if (!DEPARTURE_TIME_FEATURE_ENABLED) {
+    throw new HttpsError("failed-precondition", "Departure and arrival time calculation is temporarily disabled.");
+  }
   const meetup = await db.doc(`meetups/${meetupId}`).get();
   const data = meetup.data();
   if (!meetup.exists || !data?.meetingPlace || !data.confirmedDateTime) throw new HttpsError("failed-precondition", "Meeting place and date must be confirmed first.");
@@ -670,25 +684,12 @@ export const registerDeviceToken = onCall(async (request) => {
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  const [meetup, route] = await Promise.all([
-    db.doc(`meetups/${meetupId}`).get(),
-    db.doc(`meetups/${meetupId}/routes/${uid}`).get(),
-  ]);
-  const meetupData = meetup.data();
-  if (route.exists && meetupData?.meetingPlace) {
-    await queueDepartureNotification(
-      meetupId,
-      uid,
-      route.data() as { departureTime: string },
-      meetupData.title as string,
-      (meetupData.meetingPlace as Location).name,
-    );
-  }
   return { registered: true };
 });
 
 /** Delivers due departure reminders. Deploying this function requires Cloud Scheduler. */
 export const sendDepartureNotifications = onSchedule("every 1 minutes", async () => {
+  if (!DEPARTURE_TIME_FEATURE_ENABLED) return;
   const due = await db.collection("departureNotifications")
     .where("status", "==", "PENDING")
     .where("departureTime", "<=", Timestamp.now())

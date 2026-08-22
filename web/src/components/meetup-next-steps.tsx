@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { beginLocationSelection, calculateRoutes, confirmMeetingPlace, createExpense, deleteExpense, getMeetingPointRecommendations, getSettlement, saveOrigin, searchPlaces, updateExpense } from "@/services/meetup-repository";
+import { beginLocationSelection, confirmMeetingPlace, createExpense, deleteExpense, getMeetingPointRecommendations, getSettlement, saveOrigin, searchPlaces, updateExpense } from "@/services/meetup-repository";
 import type { Expense, Location, MeetingPointCandidate, MeetupDetail, Settlement } from "@/types/meetup";
 import { useLanguage } from "./language-provider";
 
@@ -28,50 +28,13 @@ function LocationStep({ meetupId, isHost, onChanged }: { meetupId: string; isHos
   return <section className="next-step"><p className="eyebrow">{korean ? "2단계 · 장소" : "ステップ 2 · 場所"}</p><h2>{korean ? "어디서 만날까요?" : "どこで会いますか？"}</h2>{!isHost ? <p className="step-copy">{korean ? "호스트가 모든 출발 위치를 바탕으로 만날 장소를 고르고 있어요." : "ホストがみんなの出発地をもとに、会う場所を選んでいます。"}</p> : <><p className="step-copy">{korean ? "중간지점은 각자의 이동 시간을 기준으로 추천해요." : "中間地点は、みんなの移動時間をもとにおすすめします。"}</p><div className="mode-toggle"><button className={mode === "FAIR" ? "active" : ""} onClick={() => void recommend("FAIR")}>{korean ? "⚖️ 공평하게" : "⚖️ 公平に"}</button><button className={mode === "FAST" ? "active" : ""} onClick={() => void recommend("FAST")}>{korean ? "⚡ 전체적으로 빠르게" : "⚡ 全体的に早く"}</button></div><button className="secondary-button" onClick={() => void recommend()} disabled={loading}>{loading ? korean ? "추천 계산 중..." : "計算中…" : korean ? "✨ 중간지점 추천" : "✨ 中間地点をおすすめ"}</button><div className="direct-place"><span>{korean ? "또는 직접 장소 정하기" : "または場所を直接決める"}</span><PlaceSearch label={korean ? "장소 검색" : "場所を検索"} onPick={(place) => void choose(place)} /></div>{candidates.map((candidate, index) => <article className="place-candidate" key={candidate.placeId}><div><p>{index === 0 ? korean ? "🥇 AIMASHO 추천" : "🥇 AIMASHO おすすめ" : korean ? `후보 ${index + 1}` : `候補 ${index + 1}`}</p><h3>{candidate.name}</h3><small>{korean ? `평균 ${candidate.averageDurationMinutes}분 · 가장 긴 이동 ${candidate.maxDurationMinutes}분` : `平均 ${candidate.averageDurationMinutes}分 · 最長 ${candidate.maxDurationMinutes}分`}</small></div><button className="primary-button" disabled={loading} onClick={() => void choose(candidate)}>{korean ? "여기서 만나기" : "ここで会う"}</button></article>)}</>}{error && <p className="error-message">{error}</p>}</section>;
 }
 
-function RoutesStep({ meetupId, detail, isHost, uid, onChanged }: { meetupId: string; detail: MeetupDetail; isHost: boolean; uid?: string; onChanged: () => void }) {
-  const { language, locale } = useLanguage();
+function MeetingPlaceReadyStep({ detail }: { detail: MeetupDetail }) {
+  const { language } = useLanguage();
   const korean = language === "ko";
-  const clock = (value?: string) => value ? new Intl.DateTimeFormat(locale, { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)) : "—";
-  const journey = (route: MeetupDetail["routes"][number]) => route.originName && route.destinationName ? `${route.originName} → ${route.destinationName}` : route.routeSummary;
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
-  const calculate = async () => {
-    setLoading(true);
-    try {
-      await calculateRoutes(meetupId);
-      onChanged();
-    } catch {
-      setError(korean ? "출발 시간을 계산하지 못했어요. 잠시 후 다시 시도해 주세요." : "出発時間を計算できませんでした。少し待ってからもう一度お試しください。");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (detail.routes.length === 0) return <section className="next-step"><p className="eyebrow">{korean ? "3단계 · 경로" : "ステップ 3 · 経路"}</p><h2>{korean ? "각자의 출발 시간을 계산할게요" : "みんなの出発時間を計算します"}</h2><p className="step-copy">{korean ? `${detail.meetup.meetingPlace?.name}에 약속 10분 전 도착하도록 맞춰드려요.` : `${detail.meetup.meetingPlace?.name}に予定の10分前に着くように計算します。`}</p>{isHost ? <button className="primary-button" onClick={() => void calculate()} disabled={loading}>{loading ? korean ? "경로 계산 중..." : "経路を計算中…" : korean ? "🚃 출발 시간 계산" : "🚃 出発時間を計算"}</button> : <p className="inline-note">{korean ? "호스트가 경로를 계산하면 여기에서 확인할 수 있어요." : "ホストが経路を計算すると、ここで確認できます。"}</p>}{error && <p className="error-message">{error}</p>}</section>;
-
-  const myRoute = detail.routes.find((route) => route.participantUid === uid);
-  return <section className="next-step route-step">
-    <p className="eyebrow">{korean ? "준비 완료" : "準備完了"}</p>
+  return <section className="next-step">
+    <p className="eyebrow">{korean ? "장소 확정" : "場所確定"}</p>
     <h2>{detail.meetup.meetingPlace?.name}{korean ? "에서 만나요" : "で会いましょう"}</h2>
-    <p className="target-arrival">{korean ? "목표 도착" : "目標到着"} <b>{clock(detail.meetup.targetArrivalTime)}</b></p>
-    {isHost && <button className="text-button route-recalculate" type="button" onClick={() => void calculate()} disabled={loading}>{loading ? korean ? "경로 다시 계산 중..." : "経路を再計算中…" : korean ? "경로 다시 계산" : "経路を再計算"}</button>}
-    {myRoute && <article className="my-route">
-      <p>🚃 <b>{myRoute.isEstimate ? korean ? `${clock(myRoute.departureTime)} 예상 출발` : `${clock(myRoute.departureTime)} 参考出発` : korean ? `${clock(myRoute.departureTime)}에 출발하세요` : `${clock(myRoute.departureTime)}に出発しましょう`}</b></p>
-      <h3>{journey(myRoute)}</h3>
-      <span>{myRoute.isEstimate ? korean ? `거리 기반 약 ${myRoute.durationMinutes}분 · ${clock(myRoute.arrivalTime)} 도착 목표` : `距離ベースで約${myRoute.durationMinutes}分 · ${clock(myRoute.arrivalTime)} 到着目標` : korean ? `약 ${myRoute.durationMinutes}분 · ${clock(myRoute.arrivalTime)} 도착 예정` : `約${myRoute.durationMinutes}分 · ${clock(myRoute.arrivalTime)} 到着予定`}</span>
-      {myRoute.isEstimate && <small className="route-estimate-warning">{korean ? "일본 대중교통 시간표를 받을 수 없어 실제 열차 출발시간이 아닙니다. Google Maps에서 목표 도착 시각을 직접 설정해 확인해 주세요." : "日本の公共交通の時刻表を取得できないため、実際の電車の出発時刻ではありません。Google Mapsで目標到着時刻を直接設定して確認してください。"}</small>}
-      <a href={myRoute.externalMapsUrl} target="_blank" rel="noreferrer">{korean ? "Google Maps에서 실제 경로 확인 ↗" : "Google Mapsで実際の経路を確認 ↗"}</a>
-      <small className="map-time-note">{korean ? "Google Maps 링크는 계획한 시각을 전달할 수 없어 ‘지금 출발’로 열립니다. 경로 화면에서 출발 또는 도착 시각을 직접 변경해 주세요." : "Google Mapsのリンクは予定時刻を渡せないため、「現在出発」で開きます。経路画面で出発または到着時刻を直接変更してください。"}</small>
-    </article>}
-    <div className="route-list">{detail.routes.map((route) => {
-      const participant = detail.participants.find((item) => item.uid === route.participantUid);
-      return <div key={route.participantUid}>
-        <span className="route-person"><b>{participant?.displayName ?? (korean ? "참가자" : "参加者")}</b><small>{journey(route)}</small></span>
-        <b>{clock(route.departureTime)}</b>
-        <span>{route.isEstimate ? korean ? `참고 ${route.durationMinutes}분` : `参考 ${route.durationMinutes}分` : korean ? `${route.durationMinutes}분` : `${route.durationMinutes}分`}</span>
-        <b>{clock(route.arrivalTime)}</b>
-      </div>;
-    })}</div>
+    <p className="step-copy">{korean ? "출발·도착 시간 계산과 출발 알림은 현재 비활성화되어 있어요. 실제 이동 경로와 시간은 지도 앱에서 확인해 주세요." : "出発・到着時刻の計算と出発通知は現在停止しています。実際の経路と時刻は地図アプリでご確認ください。"}</p>
   </section>;
 }
 
@@ -177,7 +140,6 @@ function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: Mee
 export function MeetupNextSteps({ meetupId, detail, currentUid, isHost, onChanged }: { meetupId: string; detail: MeetupDetail; currentUid?: string; isHost: boolean; onChanged: () => void }) {
   if (detail.meetup.status === "SCHEDULE_CONFIRMED" || detail.meetup.status === "LOCATION_COLLECTING") return <OriginStep meetupId={meetupId} detail={detail} currentUid={currentUid} isHost={isHost} onChanged={onChanged} />;
   if (detail.meetup.status === "LOCATION_SELECTING") return <LocationStep meetupId={meetupId} isHost={isHost} onChanged={onChanged} />;
-  if (detail.meetup.status === "LOCATION_CONFIRMED") return <RoutesStep meetupId={meetupId} detail={detail} isHost={isHost} uid={currentUid} onChanged={onChanged} />;
-  if (detail.meetup.status === "READY") return <><RoutesStep meetupId={meetupId} detail={detail} isHost={isHost} uid={currentUid} onChanged={onChanged} /><ExpensesStep meetupId={meetupId} detail={detail} uid={currentUid} /></>;
+  if (detail.meetup.status === "LOCATION_CONFIRMED" || detail.meetup.status === "READY") return <><MeetingPlaceReadyStep detail={detail} /><ExpensesStep meetupId={meetupId} detail={detail} uid={currentUid} /></>;
   return null;
 }

@@ -6,7 +6,7 @@ import { LanguageProvider } from "@/components/language-provider";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://aimasho.web.app"),
-  title: "aimasho — みんなの「いつ・どこ・何時に出る？」を、ひとつに。",
+  title: "aimasho — みんなの「いつ・どこで会う？」を、ひとつに。",
   description: "予定を合わせて、場所を合わせて、会いましょう。",
   icons: {
     icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
