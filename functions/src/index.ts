@@ -1,5 +1,5 @@
 import { getApps, initializeApp } from "firebase-admin/app";
-import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
+import { FieldValue, Timestamp, getFirestore, type DocumentSnapshot } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { HttpsError, onCall, onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
@@ -28,7 +28,8 @@ type MeetupStatus =
   | "LOCATION_SELECTING"
   | "LOCATION_CONFIRMED"
   | "READY"
-  | "COMPLETED";
+  | "COMPLETED"
+  | "CANCELLED";
 
 interface CreateMeetupInput {
   displayName: string;
@@ -37,6 +38,47 @@ interface CreateMeetupInput {
   durationMinutes: number;
   candidateSlots: string[];
   roomId?: string | null;
+  collectOrigins?: boolean;
+  allowParticipantSlotAdd?: boolean;
+  responseDeadline?: string | null;
+  scheduleCondition?: ScheduleConditionInput;
+  contentVoteConfig?: ContentVoteConfigInput;
+  allowPlanEditing?: boolean;
+}
+
+interface ScheduleConditionInput {
+  mode: "MANUAL" | "RANGE" | "MONTH" | "NEXT_MONTH";
+  rangeStart?: string;
+  rangeEnd?: string;
+  weekdayNumbers?: number[];
+}
+
+type ContentCategory = "FOOD" | "ACTIVITY";
+type PlanItemType = "meet" | "food" | "activity" | "cafe" | "move" | "other" | "end";
+type PlanItemStatus = "planned" | "completed" | "skipped";
+type PlanItemSource = "manual" | "vote" | "recommendation";
+
+interface ContentVoteConfigInput {
+  food?: boolean;
+  activity?: boolean;
+  allowMultiple?: boolean;
+  allowParticipantOptions?: boolean;
+}
+
+interface ContentVoteConfig {
+  food: boolean;
+  activity: boolean;
+  allowMultiple: boolean;
+  allowParticipantOptions: boolean;
+}
+
+interface PlanItemPayload {
+  type: PlanItemType;
+  title: string;
+  place?: Location;
+  scheduledAt?: Date;
+  note?: string;
+  source: PlanItemSource;
 }
 
 type LocationInput = Location;
@@ -81,6 +123,99 @@ function requireIsoDateTime(value: unknown, field: string): Date {
   }
   return date;
 }
+
+function optionalIsoDateTime(value: unknown, field: string): Date | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  return requireIsoDateTime(value, field);
+}
+
+function requireBoolean(value: unknown, field: string, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new HttpsError("invalid-argument", `${field} must be a boolean.`);
+  return value;
+}
+
+function requireScheduleCondition(value: unknown): ScheduleConditionInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", "scheduleCondition is invalid.");
+  const input = value as Partial<ScheduleConditionInput>;
+  if (input.mode !== "MANUAL" && input.mode !== "RANGE" && input.mode !== "MONTH" && input.mode !== "NEXT_MONTH") {
+    throw new HttpsError("invalid-argument", "scheduleCondition.mode is invalid.");
+  }
+  const rangeStart = input.rangeStart === undefined ? undefined : parseIsoDate(input.rangeStart);
+  const rangeEnd = input.rangeEnd === undefined ? undefined : parseIsoDate(input.rangeEnd);
+  if (rangeStart && rangeEnd && new Date(rangeStart) > new Date(rangeEnd)) {
+    throw new HttpsError("invalid-argument", "scheduleCondition range is invalid.");
+  }
+  if (input.weekdayNumbers !== undefined && (!Array.isArray(input.weekdayNumbers) || input.weekdayNumbers.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) {
+    throw new HttpsError("invalid-argument", "scheduleCondition.weekdayNumbers is invalid.");
+  }
+  return {
+    mode: input.mode,
+    ...(rangeStart ? { rangeStart } : {}),
+    ...(rangeEnd ? { rangeEnd } : {}),
+    ...(input.weekdayNumbers ? { weekdayNumbers: [...new Set(input.weekdayNumbers)].sort() } : {}),
+  };
+}
+
+function responseDeadlineHasPassed(value: unknown): boolean {
+  return value instanceof Timestamp && value.toMillis() <= Date.now();
+}
+
+function requireContentVoteConfig(value: unknown): ContentVoteConfig {
+  const input = value && typeof value === "object" ? value as ContentVoteConfigInput : {};
+  return {
+    food: requireBoolean(input.food, "contentVoteConfig.food", false),
+    activity: requireBoolean(input.activity, "contentVoteConfig.activity", false),
+    allowMultiple: requireBoolean(input.allowMultiple, "contentVoteConfig.allowMultiple", false),
+    allowParticipantOptions: requireBoolean(input.allowParticipantOptions, "contentVoteConfig.allowParticipantOptions", true),
+  };
+}
+
+function requireContentCategory(value: unknown): ContentCategory {
+  if (value === "FOOD" || value === "ACTIVITY") return value;
+  throw new HttpsError("invalid-argument", "category must be FOOD or ACTIVITY.");
+}
+
+function requirePlanItemType(value: unknown): PlanItemType {
+  if (["meet", "food", "activity", "cafe", "move", "other", "end"].includes(value as string)) return value as PlanItemType;
+  throw new HttpsError("invalid-argument", "Plan item type is invalid.");
+}
+
+function requirePlanItemStatus(value: unknown): PlanItemStatus {
+  if (value === "planned" || value === "completed" || value === "skipped") return value;
+  throw new HttpsError("invalid-argument", "Plan item status is invalid.");
+}
+
+function requirePlanItemSource(value: unknown): PlanItemSource {
+  if (value === undefined || value === null) return "manual";
+  if (value === "manual" || value === "vote" || value === "recommendation") return value;
+  throw new HttpsError("invalid-argument", "Plan item source is invalid.");
+}
+
+function requirePlanItemPayload(value: unknown): PlanItemPayload {
+  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", "Plan item is invalid.");
+  const input = value as Record<string, unknown>;
+  const scheduledAt = optionalIsoDateTime(input.scheduledAt, "scheduledAt");
+  const note = input.note === undefined || input.note === null || input.note === "" ? undefined : requireString(input.note, "note", 500);
+  return {
+    type: requirePlanItemType(input.type),
+    title: requireString(input.title, "title", 120),
+    ...(input.place ? { place: requireLocation(input.place, "place") } : {}),
+    ...(scheduledAt ? { scheduledAt } : {}),
+    ...(note ? { note } : {}),
+    source: requirePlanItemSource(input.source),
+  };
+}
+
+function contentVotingEnabled(config: ContentVoteConfig, category: ContentCategory): boolean {
+  return category === "FOOD" ? config.food : config.activity;
+}
+
+const defaultContentOptions: Record<ContentCategory, string[]> = {
+  FOOD: ["焼肉", "居酒屋", "イタリアン", "カフェ", "ラーメン", "韓国料理", "寿司"],
+  ACTIVITY: ["映画", "カラオケ", "ボウリング", "水族館", "ショッピング", "アウトドア", "ドライブ"],
+};
 
 function requireLocation(value: unknown, field = "location"): LocationInput {
   if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", `${field} is invalid.`);
@@ -238,6 +373,51 @@ async function recordRelationshipsForRegisteredUser(uid: string): Promise<void> 
   await Promise.all([...meetupIds].map((meetupId) => recordRelationshipsForMeetup(meetupId, uid)));
 }
 
+interface HistoryMeetupPayload {
+  id: string;
+  title: string;
+  status: MeetupStatus;
+  confirmedDateTime: string | null;
+  completedAt: string | null;
+  meetingPlace: Location | null;
+  planPlaces: Location[];
+}
+
+function timestampIso(value: unknown): string | null {
+  return value instanceof Timestamp ? value.toDate().toISOString() : null;
+}
+
+async function historyMeetupPayload(snapshot: DocumentSnapshot): Promise<HistoryMeetupPayload> {
+  const data = snapshot.data();
+  const plans = await snapshot.ref.collection("planItems").get();
+  const planPlaces = plans.docs
+    .filter((item) => item.data()?.status === "completed" && item.data()?.place)
+    .map((item) => item.data().place as Location);
+  return {
+    id: snapshot.id,
+    title: data?.title ?? "aimasho meetup",
+    status: data?.status as MeetupStatus,
+    confirmedDateTime: timestampIso(data?.confirmedDateTime),
+    completedAt: timestampIso(data?.completedAt),
+    meetingPlace: data?.meetingPlace ? data.meetingPlace as Location : null,
+    planPlaces,
+  };
+}
+
+function mapPlaceVisits(meetups: HistoryMeetupPayload[]) {
+  const places = new Map<string, { place: Location; count: number; meetupIds: string[] }>();
+  for (const meetup of meetups.filter((item) => item.status === "COMPLETED")) {
+    const usedPlaces = meetup.planPlaces.length > 0 ? meetup.planPlaces : meetup.meetingPlace ? [meetup.meetingPlace] : [];
+    for (const place of usedPlaces) {
+      const current = places.get(place.placeId) ?? { place, count: 0, meetupIds: [] };
+      current.count += 1;
+      if (!current.meetupIds.includes(meetup.id)) current.meetupIds.push(meetup.id);
+      places.set(place.placeId, current);
+    }
+  }
+  return [...places.values()].sort((a, b) => b.count - a.count || a.place.name.localeCompare(b.place.name));
+}
+
 export const createMeetup = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const data = request.data as Partial<CreateMeetupInput>;
@@ -252,6 +432,15 @@ export const createMeetup = onCall(async (request) => {
   const candidateSlots = [...new Set(data.candidateSlots.map(parseIsoDate))].sort();
   const displayName = requireString(data.displayName, "displayName", 60);
   const roomId = data.roomId === undefined || data.roomId === null ? null : requireString(data.roomId, "roomId", 128);
+  const collectOrigins = requireBoolean(data.collectOrigins, "collectOrigins", true);
+  const allowParticipantSlotAdd = requireBoolean(data.allowParticipantSlotAdd, "allowParticipantSlotAdd", false);
+  const responseDeadline = optionalIsoDateTime(data.responseDeadline, "responseDeadline");
+  const scheduleCondition = requireScheduleCondition(data.scheduleCondition);
+  const contentVoteConfig = requireContentVoteConfig(data.contentVoteConfig);
+  const allowPlanEditing = requireBoolean(data.allowPlanEditing, "allowPlanEditing", false);
+  if (responseDeadline && responseDeadline.getTime() <= Date.now()) {
+    throw new HttpsError("invalid-argument", "responseDeadline must be in the future.");
+  }
   const roomMembers = roomId ? await db.collection(`rooms/${roomId}/members`).get() : null;
   if (roomId && roomMembers?.empty) throw new HttpsError("not-found", "Room not found.");
   if (roomId && !roomMembers?.docs.some((member) => member.id === uid)) throw new HttpsError("permission-denied", "You are not a Room member.");
@@ -267,6 +456,12 @@ export const createMeetup = onCall(async (request) => {
     createdByUid: uid,
     status: "SCHEDULING" satisfies MeetupStatus,
     durationMinutes: data.durationMinutes,
+    collectOrigins,
+    allowParticipantSlotAdd,
+    ...(responseDeadline ? { responseDeadline: Timestamp.fromDate(responseDeadline) } : {}),
+    ...(scheduleCondition ? { scheduleCondition } : {}),
+    contentVoteConfig,
+    allowPlanEditing,
     arrivalBufferMinutes: 10,
     createdAt: now,
     updatedAt: now,
@@ -290,7 +485,14 @@ export const createMeetup = onCall(async (request) => {
   }
   for (const startDateTime of candidateSlots) {
     const slot = meetup.collection("candidateSlots").doc();
-    batch.set(slot, { id: slot.id, startDateTime: Timestamp.fromDate(new Date(startDateTime)), createdAt: now });
+    batch.set(slot, { id: slot.id, startDateTime: Timestamp.fromDate(new Date(startDateTime)), createdByUid: uid, createdAt: now });
+  }
+  for (const category of ["FOOD", "ACTIVITY"] as ContentCategory[]) {
+    if (!contentVotingEnabled(contentVoteConfig, category)) continue;
+    for (const label of defaultContentOptions[category]) {
+      const option = meetup.collection("contentOptions").doc();
+      batch.set(option, { id: option.id, category, label, builtIn: true, createdByUid: uid, createdAt: now });
+    }
   }
   await batch.commit();
   try {
@@ -375,6 +577,9 @@ export const upsertVote = onCall(async (request) => {
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
   const slotId = requireString(request.data?.slotId, "slotId", 128);
   const status = requireVoteStatus(request.data?.status);
+  const comment = request.data?.comment === undefined || request.data?.comment === null || request.data?.comment === ""
+    ? undefined
+    : requireString(request.data.comment, "comment", 240);
   await requireParticipant(meetupId, uid);
   const meetup = db.doc(`meetups/${meetupId}`);
   const [meetupSnapshot, slot] = await Promise.all([
@@ -385,14 +590,202 @@ export const upsertVote = onCall(async (request) => {
   if (meetupSnapshot.data()?.status !== "SCHEDULING") {
     throw new HttpsError("failed-precondition", "Voting is closed after the schedule is confirmed.");
   }
+  if (responseDeadlineHasPassed(meetupSnapshot.data()?.responseDeadline)) {
+    throw new HttpsError("failed-precondition", "The response deadline has passed.");
+  }
   if (!slot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
   await db.doc(`meetups/${meetupId}/votes/${uid}_${slotId}`).set({
     participantUid: uid,
     slotId,
     status,
+    ...(comment ? { comment } : { comment: FieldValue.delete() }),
     updatedAt: FieldValue.serverTimestamp(),
-  });
+  }, { merge: true });
   return { ok: true };
+});
+
+/** Adds a candidate slot when the host has opened candidate suggestions. */
+export const addCandidateSlot = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const startDateTime = requireIsoDateTime(request.data?.startDateTime, "startDateTime");
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const participant = await requireParticipant(meetupId, uid);
+  const snapshot = await meetup.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+  if (snapshot.data()?.status !== "SCHEDULING") {
+    throw new HttpsError("failed-precondition", "Candidate dates can be added only while scheduling.");
+  }
+  if (responseDeadlineHasPassed(snapshot.data()?.responseDeadline)) {
+    throw new HttpsError("failed-precondition", "The response deadline has passed.");
+  }
+  if (participant.data()?.isHost !== true && snapshot.data()?.allowParticipantSlotAdd !== true) {
+    throw new HttpsError("permission-denied", "The host has not opened candidate suggestions.");
+  }
+  const slots = await meetup.collection("candidateSlots").get();
+  if (slots.size >= 24) throw new HttpsError("resource-exhausted", "A meetup can have up to 24 candidate slots.");
+  if (slots.docs.some((slot) => (slot.data().startDateTime as Timestamp).toMillis() === startDateTime.getTime())) {
+    throw new HttpsError("already-exists", "This candidate date already exists.");
+  }
+  const slot = meetup.collection("candidateSlots").doc();
+  await slot.set({
+    id: slot.id,
+    startDateTime: Timestamp.fromDate(startDateTime),
+    createdByUid: uid,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  return { id: slot.id, startDateTime: startDateTime.toISOString() };
+});
+
+/** Selects or clears a food/activity option for the caller. */
+export const toggleContentVote = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const optionId = requireString(request.data?.optionId, "optionId", 128);
+  const selected = requireBoolean(request.data?.selected, "selected", true);
+  await requireParticipant(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const [meetupSnapshot, option] = await Promise.all([
+    meetup.get(),
+    meetup.collection("contentOptions").doc(optionId).get(),
+  ]);
+  if (!meetupSnapshot.exists || !option.exists) throw new HttpsError("not-found", "Meetup or content option not found.");
+  const status = meetupSnapshot.data()?.status as MeetupStatus | undefined;
+  if (!status || status === "COMPLETED" || status === "CANCELLED") throw new HttpsError("failed-precondition", "Content voting is closed.");
+  const category = requireContentCategory(option.data()?.category);
+  const config = requireContentVoteConfig(meetupSnapshot.data()?.contentVoteConfig);
+  if (!contentVotingEnabled(config, category)) throw new HttpsError("failed-precondition", "This content vote is disabled.");
+  const vote = meetup.collection("contentVotes").doc(`${uid}_${optionId}`);
+  if (!selected) {
+    await vote.delete();
+    return { selected: false };
+  }
+  const batch = db.batch();
+  if (!config.allowMultiple) {
+    const existing = await meetup.collection("contentVotes").where("participantUid", "==", uid).get();
+    existing.docs.filter((item) => item.data().category === category && item.id !== vote.id).forEach((item) => batch.delete(item.ref));
+  }
+  batch.set(vote, { participantUid: uid, optionId, category, updatedAt: FieldValue.serverTimestamp() });
+  await batch.commit();
+  return { selected: true };
+});
+
+/** Lets participants propose a custom food/activity option when the host allows it. */
+export const addContentOption = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const category = requireContentCategory(request.data?.category);
+  const label = requireString(request.data?.label, "label", 60);
+  const participant = await requireParticipant(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const snapshot = await meetup.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+  const status = snapshot.data()?.status as MeetupStatus | undefined;
+  if (!status || status === "COMPLETED" || status === "CANCELLED") throw new HttpsError("failed-precondition", "Content voting is closed.");
+  const config = requireContentVoteConfig(snapshot.data()?.contentVoteConfig);
+  if (!contentVotingEnabled(config, category)) throw new HttpsError("failed-precondition", "This content vote is disabled.");
+  if (participant.data()?.isHost !== true && !config.allowParticipantOptions) throw new HttpsError("permission-denied", "The host has not opened option suggestions.");
+  const existing = await meetup.collection("contentOptions").where("category", "==", category).get();
+  if (existing.docs.some((item) => String(item.data().label).toLocaleLowerCase() === label.toLocaleLowerCase())) throw new HttpsError("already-exists", "This option already exists.");
+  const option = meetup.collection("contentOptions").doc();
+  await option.set({ id: option.id, category, label, createdByUid: uid, builtIn: false, createdAt: FieldValue.serverTimestamp() });
+  return { id: option.id };
+});
+
+async function requirePlanEditor(meetupId: string, uid: string) {
+  const [participant, meetup] = await Promise.all([requireParticipant(meetupId, uid), db.doc(`meetups/${meetupId}`).get()]);
+  if (!meetup.exists) throw new HttpsError("not-found", "Meetup not found.");
+  const status = meetup.data()?.status as MeetupStatus | undefined;
+  if (!status || status === "SCHEDULING" || status === "COMPLETED" || status === "CANCELLED") throw new HttpsError("failed-precondition", "The event plan is not editable.");
+  if (participant.data()?.isHost !== true && meetup.data()?.allowPlanEditing !== true) throw new HttpsError("permission-denied", "Only the host can edit this plan.");
+  return { participant, meetup };
+}
+
+export const createPlanItem = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const item = requirePlanItemPayload(request.data?.item);
+  const { meetup } = await requirePlanEditor(meetupId, uid);
+  const existing = await meetup.ref.collection("planItems").get();
+  if (existing.size >= 100) throw new HttpsError("resource-exhausted", "A plan can have up to 100 items.");
+  const order = existing.docs.reduce((maximum, current) => Math.max(maximum, Number(current.data().order) || 0), 0) + 1000;
+  const ref = meetup.ref.collection("planItems").doc();
+  await ref.set({ id: ref.id, ...item, ...(item.scheduledAt ? { scheduledAt: Timestamp.fromDate(item.scheduledAt) } : {}), status: "planned" satisfies PlanItemStatus, order, createdByUid: uid, createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  return { id: ref.id };
+});
+
+export const updatePlanItem = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const itemId = requireString(request.data?.itemId, "itemId", 128);
+  const item = requirePlanItemPayload(request.data?.item);
+  const { meetup } = await requirePlanEditor(meetupId, uid);
+  const ref = meetup.ref.collection("planItems").doc(itemId);
+  if (!(await ref.get()).exists) throw new HttpsError("not-found", "Plan item not found.");
+  await ref.update({ ...item, ...(item.scheduledAt ? { scheduledAt: Timestamp.fromDate(item.scheduledAt) } : { scheduledAt: FieldValue.delete() }), ...(item.note ? { note: item.note } : { note: FieldValue.delete() }), ...(item.place ? { place: item.place } : { place: FieldValue.delete() }), updatedAt: FieldValue.serverTimestamp() });
+  return { id: itemId };
+});
+
+export const deletePlanItem = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const itemId = requireString(request.data?.itemId, "itemId", 128);
+  const { meetup } = await requirePlanEditor(meetupId, uid);
+  await meetup.ref.collection("planItems").doc(itemId).delete();
+  return { id: itemId };
+});
+
+export const reorderPlanItems = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  if (!Array.isArray(request.data?.itemIds) || request.data.itemIds.length > 100 || request.data.itemIds.some((id: unknown) => typeof id !== "string" || id.length === 0)) throw new HttpsError("invalid-argument", "itemIds is invalid.");
+  const itemIds = [...new Set(request.data.itemIds as string[])];
+  const { meetup } = await requirePlanEditor(meetupId, uid);
+  const existing = await meetup.ref.collection("planItems").get();
+  if (itemIds.length !== existing.size || existing.docs.some((item) => !itemIds.includes(item.id))) throw new HttpsError("invalid-argument", "itemIds must include every plan item exactly once.");
+  const batch = db.batch();
+  itemIds.forEach((id, index) => batch.update(meetup.ref.collection("planItems").doc(id), { order: (index + 1) * 1000, updatedAt: FieldValue.serverTimestamp() }));
+  await batch.commit();
+  return { ok: true };
+});
+
+export const setPlanItemStatus = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const itemId = requireString(request.data?.itemId, "itemId", 128);
+  const status = requirePlanItemStatus(request.data?.status);
+  await requireParticipant(meetupId, uid);
+  const meetup = await db.doc(`meetups/${meetupId}`).get();
+  if (!meetup.exists || ["SCHEDULING", "COMPLETED", "CANCELLED"].includes(meetup.data()?.status)) throw new HttpsError("failed-precondition", "Plan item status cannot be changed.");
+  const item = meetup.ref.collection("planItems").doc(itemId);
+  if (!(await item.get()).exists) throw new HttpsError("not-found", "Plan item not found.");
+  await item.update({ status, ...(status === "completed" ? { completedAt: FieldValue.serverTimestamp(), completedByUid: uid } : { completedAt: FieldValue.delete(), completedByUid: FieldValue.delete() }), updatedAt: FieldValue.serverTimestamp() });
+  return { status };
+});
+
+/** Completed meetups are retained as history; they are never copied to a second record. */
+export const completeMeetup = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireHost(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const snapshot = await meetup.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+  if (["SCHEDULING", "CANCELLED"].includes(snapshot.data()?.status)) throw new HttpsError("failed-precondition", "Only a scheduled meetup can be completed.");
+  await meetup.update({ status: "COMPLETED" satisfies MeetupStatus, completedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  return { status: "COMPLETED" };
+});
+
+export const cancelMeetup = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireHost(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const snapshot = await meetup.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
+  if (snapshot.data()?.status === "COMPLETED") throw new HttpsError("failed-precondition", "Completed meetups cannot be cancelled.");
+  await meetup.update({ status: "CANCELLED" satisfies MeetupStatus, cancelledAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  return { status: "CANCELLED" };
 });
 
 export const calculateScheduleRecommendation = onCall(async (request) => {
@@ -420,48 +813,35 @@ export const calculateScheduleRecommendation = onCall(async (request) => {
 export const confirmSchedule = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
-  // The client sends the candidate it was showing, but the server always
-  // recalculates the winner from the latest votes before it confirms anything.
-  // This prevents a stale screen (or a hand-crafted request) from confirming
-  // a different candidate from the actual vote result.
-  requireString(request.data?.slotId, "slotId", 128);
+  // The host's explicit choice wins. Votes remain visible as decision support,
+  // but a different, newly-ranked slot must never replace the one the host
+  // selected on screen between a refresh and confirmation.
+  const slotId = requireString(request.data?.slotId, "slotId", 128);
   await requireHost(meetupId, uid);
   const meetup = db.doc(`meetups/${meetupId}`);
   const confirmation = await db.runTransaction(async (transaction) => {
-    const [meetupSnapshot, slotsSnapshot, votesSnapshot, participantsSnapshot] = await Promise.all([
+    const [meetupSnapshot, slotSnapshot] = await Promise.all([
       transaction.get(meetup),
-      transaction.get(meetup.collection("candidateSlots")),
-      transaction.get(meetup.collection("votes")),
-      transaction.get(meetup.collection("participants")),
+      transaction.get(meetup.collection("candidateSlots").doc(slotId)),
     ]);
     if (!meetupSnapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
     if (meetupSnapshot.data()?.status !== "SCHEDULING") {
       throw new HttpsError("failed-precondition", "The schedule has already been confirmed.");
     }
-    const recommendation = rankSchedule(
-      slotsSnapshot.docs.map((slot) => ({
-        id: slot.id,
-        startDateTime: (slot.data().startDateTime as Timestamp).toDate().toISOString(),
-      })),
-      votesSnapshot.docs.map((vote) => ({
-        participantUid: vote.data().participantUid,
-        slotId: vote.data().slotId,
-        status: vote.data().status as VoteStatus,
-      })),
-      participantsSnapshot.size,
-    ).recommended;
-    if (!recommendation) throw new HttpsError("failed-precondition", "At least one candidate slot is required.");
-    const winner = slotsSnapshot.docs.find((slot) => slot.id === recommendation.id);
-    if (!winner) throw new HttpsError("internal", "The recommended candidate slot was not found.");
-    const value = winner.data().startDateTime as Timestamp;
+    if (!slotSnapshot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
+    const value = slotSnapshot.data()?.startDateTime as Timestamp | undefined;
+    if (!(value instanceof Timestamp)) throw new HttpsError("failed-precondition", "Candidate slot is invalid.");
+    const nextStatus: MeetupStatus = meetupSnapshot.data()?.collectOrigins === false
+      ? "LOCATION_SELECTING"
+      : "SCHEDULE_CONFIRMED";
     transaction.update(meetup, {
-      status: "SCHEDULE_CONFIRMED" satisfies MeetupStatus,
+      status: nextStatus,
       confirmedDateTime: value,
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return { slotId: winner.id, confirmedDateTime: value.toDate().toISOString() };
+    return { slotId, confirmedDateTime: value.toDate().toISOString(), status: nextStatus };
   });
-  return { status: "SCHEDULE_CONFIRMED", ...confirmation };
+  return confirmation;
 });
 
 /**
@@ -482,8 +862,8 @@ export const updateConfirmedSchedule = onCall(async (request) => {
   if (!previousStatus || previousStatus === "SCHEDULING") {
     throw new HttpsError("failed-precondition", "Confirm a schedule before changing it.");
   }
-  if (previousStatus === "COMPLETED") {
-    throw new HttpsError("failed-precondition", "Completed meetups cannot be changed.");
+  if (previousStatus === "COMPLETED" || previousStatus === "CANCELLED") {
+    throw new HttpsError("failed-precondition", "Completed or cancelled meetups cannot be changed.");
   }
 
   const [routes, notifications, participants] = await Promise.all([
@@ -530,7 +910,7 @@ export const updateConfirmedScheduleAvailability = onCall(async (request) => {
   const participant = await requireParticipant(meetupId, uid);
   const meetup = await db.doc(`meetups/${meetupId}`).get();
   const meetupStatus = meetup.data()?.status as MeetupStatus | undefined;
-  if (!meetup.exists || !meetupStatus || meetupStatus === "SCHEDULING" || meetupStatus === "COMPLETED") {
+  if (!meetup.exists || !meetupStatus || meetupStatus === "SCHEDULING" || meetupStatus === "COMPLETED" || meetupStatus === "CANCELLED") {
     throw new HttpsError("failed-precondition", "A confirmed upcoming schedule is required.");
   }
   await participant.ref.set({
@@ -564,6 +944,9 @@ export const saveOrigin = onCall(async (request) => {
   await requireParticipant(meetupId, uid);
   const meetup = await db.doc(`meetups/${meetupId}`).get();
   if (!meetup.exists) throw new HttpsError("not-found", "Meetup not found.");
+  if (meetup.data()?.collectOrigins === false) {
+    throw new HttpsError("failed-precondition", "The host has disabled origin collection for this meetup.");
+  }
   if (!["SCHEDULE_CONFIRMED", "LOCATION_COLLECTING", "LOCATION_SELECTING"].includes(meetup.data()?.status)) {
     throw new HttpsError("failed-precondition", "Origins can be saved only after the schedule is confirmed.");
   }
@@ -600,11 +983,28 @@ export const getMeetingPointRecommendations = onCall(async (request) => {
   await requireParticipant(meetupId, uid);
   const origins = await participantOrigins(meetupId);
   if (origins.length < 2) throw new HttpsError("failed-precondition", "At least two participants need an origin first.");
+  const [options, contentVotes] = await Promise.all([
+    db.collection(`meetups/${meetupId}/contentOptions`).get(),
+    db.collection(`meetups/${meetupId}/contentVotes`).get(),
+  ]);
+  const voteCounts = new Map<string, number>();
+  contentVotes.docs.forEach((vote) => voteCounts.set(vote.data().optionId, (voteCounts.get(vote.data().optionId) ?? 0) + 1));
+  const preferredLabels = options.docs
+    .map((option) => ({ label: option.data().label as string, count: voteCounts.get(option.id) ?? 0 }))
+    .filter((option) => option.count > 0)
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .slice(0, 2)
+    .map((option) => option.label);
   const provider = getMapsProvider();
   try {
-    const candidates = await provider.candidatePlaces(geographicCenter(origins.map((item) => item.origin)));
+    const center = geographicCenter(origins.map((item) => item.origin));
+    // When content voting is active, look for actual places matching the most
+    // popular food/activity choice near the fair geographic center.
+    const candidates = preferredLabels.length > 0
+      ? await provider.searchPlaces(preferredLabels.join(" "), center)
+      : await provider.candidatePlaces(center);
     const matrix = await provider.calculateMatrix(origins.map((item) => item.origin), candidates);
-    return { mode, candidates: rankMeetingPoints(candidates, matrix.durations, origins.map((item) => item.uid), mode).slice(0, 3) };
+    return { mode, contentPreferences: preferredLabels, candidates: rankMeetingPoints(candidates, matrix.durations, origins.map((item) => item.uid), mode).slice(0, 3) };
   } catch (caught) {
     console.error("getMeetingPointRecommendations failed", { meetupId, message: caught instanceof Error ? caught.message : "Unknown Routes API error" });
     throw new HttpsError("failed-precondition", "Route calculation is temporarily unavailable. Check the Routes API and try again.");
@@ -829,6 +1229,26 @@ export const getMyRelationships = onCall(async (request) => {
   };
 });
 
+/** Returns the events two registered users shared, including completed history. */
+export const getFriendHistory = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const otherUid = requireString(request.data?.otherUid, "otherUid", 128);
+  if (!(await isRegisteredUser(uid))) throw new HttpsError("failed-precondition", "Create an account to view friend history.");
+  const relationship = await db.doc(`users/${uid}/relationships/${otherUid}`).get();
+  if (!relationship.exists) throw new HttpsError("not-found", "Friend relationship not found.");
+  const participations = await db.collectionGroup("participants").where("uid", "==", uid).limit(150).get();
+  const candidates = await Promise.all(participations.docs.map(async (participant) => participant.ref.parent.parent?.get()));
+  const shared = await Promise.all(candidates.filter((meetup): meetup is DocumentSnapshot => Boolean(meetup?.exists)).map(async (meetup) => ({ meetup, other: await meetup.ref.collection("participants").doc(otherUid).get() })));
+  const histories = await Promise.all(shared.filter(({ other }) => other.exists).map(({ meetup }) => historyMeetupPayload(meetup)));
+  histories.sort((a, b) => (b.completedAt ?? b.confirmedDateTime ?? "").localeCompare(a.completedAt ?? a.confirmedDateTime ?? ""));
+  return {
+    otherUid,
+    displayName: relationship.data()?.displayName ?? "aimasho user",
+    completedMeetupCount: histories.filter((meetup) => meetup.status === "COMPLETED").length,
+    meetups: histories,
+  };
+});
+
 export const saveDefaultOrigin = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   if (request.auth?.token.firebase?.sign_in_provider === "anonymous") throw new HttpsError("failed-precondition", "Create an account to save a default origin.");
@@ -897,6 +1317,18 @@ export const getRoomDetail = onCall(async (request) => {
   if (!room.exists) throw new HttpsError("not-found", "Room not found.");
   const membership = await room.ref.collection("members").doc(uid).get();
   if (!membership.exists) throw new HttpsError("permission-denied", "You are not a Room member.");
-  const [members, meetups] = await Promise.all([room.ref.collection("members").get(), db.collection("meetups").where("roomId", "==", roomId).get()]);
-  return { room: { id: room.id, name: room.data()?.name, inviteCode: room.data()?.inviteCode, ownerUid: room.data()?.ownerUid }, members: members.docs.map((member) => member.data()), meetups: meetups.docs.map((meetup) => ({ id: meetup.id, title: meetup.data().title, status: meetup.data().status, confirmedDateTime: meetup.data().confirmedDateTime?.toDate().toISOString() ?? null })) };
+  const [members, meetups] = await Promise.all([room.ref.collection("members").get(), db.collection("meetups").where("roomId", "==", roomId).limit(150).get()]);
+  const history = await Promise.all(meetups.docs.map((meetup) => historyMeetupPayload(meetup)));
+  history.sort((a, b) => (b.completedAt ?? b.confirmedDateTime ?? "").localeCompare(a.completedAt ?? a.confirmedDateTime ?? ""));
+  const completed = history.filter((meetup) => meetup.status === "COMPLETED");
+  const mapPlaces = mapPlaceVisits(history);
+  const completedChronologically = [...completed].sort((a, b) => (a.completedAt ?? a.confirmedDateTime ?? "").localeCompare(b.completedAt ?? b.confirmedDateTime ?? ""));
+  const occurrenceById = new Map(completedChronologically.map((meetup, index) => [meetup.id, index + 1]));
+  return {
+    room: { id: room.id, name: room.data()?.name, inviteCode: room.data()?.inviteCode, ownerUid: room.data()?.ownerUid },
+    members: members.docs.map((member) => member.data()),
+    meetups: history.map((meetup) => ({ ...meetup, occurrence: occurrenceById.get(meetup.id) ?? null })),
+    summary: { completedMeetupCount: completed.length, uniquePlaceCount: mapPlaces.length, mostVisitedPlace: mapPlaces[0] ?? null },
+    mapPlaces,
+  };
 });

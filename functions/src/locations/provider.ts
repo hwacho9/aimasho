@@ -79,7 +79,9 @@ class GoogleMapsProvider implements MapsProvider {
     const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Goog-Api-Key": this.apiKey, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location" },
-      body: JSON.stringify({ textQuery: query, ...(near ? { locationBias: { circle: { center: { latitude: near.latitude, longitude: near.longitude }, radius: 25000 } } } : {}) }),
+      // Use Japanese place labels and addresses for the Japan-first UI while
+      // retaining the stable Google Place ID and coordinates internally.
+      body: JSON.stringify({ textQuery: query, languageCode: "ja", regionCode: "JP", ...(near ? { locationBias: { circle: { center: { latitude: near.latitude, longitude: near.longitude }, radius: 25000 } } } : {}) }),
     });
     if (!response.ok) throw new Error(`Google Places request failed (${response.status}).`);
     const payload = await response.json() as { places?: Array<{ id: string; displayName?: { text?: string }; formattedAddress?: string; location?: { latitude?: number; longitude?: number } }> };

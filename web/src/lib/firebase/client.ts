@@ -2,7 +2,7 @@
 
 import { FirebaseApp, getApp, getApps, initializeApp } from "firebase/app";
 import { getAnalytics, isSupported, logEvent, type Analytics } from "firebase/analytics";
-import { Auth, connectAuthEmulator, getAuth, GoogleAuthProvider, linkWithPopup, signInAnonymously, signInWithPopup, User } from "firebase/auth";
+import { Auth, connectAuthEmulator, getAuth, GoogleAuthProvider, linkWithPopup, reauthenticateWithPopup, signInAnonymously, signInWithPopup, User } from "firebase/auth";
 import { connectFirestoreEmulator, Firestore, getFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, Functions, getFunctions } from "firebase/functions";
 
@@ -103,4 +103,27 @@ export async function continueWithGoogle(): Promise<User> {
   const current = auth.currentUser;
   if (current?.isAnonymous) return (await linkWithPopup(current, provider)).user;
   return (await signInWithPopup(auth, provider)).user;
+}
+
+/**
+ * Requests a short-lived Calendar read scope only after the user explicitly
+ * asks for it. The access token is intentionally returned to the caller and
+ * is never sent to Firestore or Cloud Functions.
+ */
+export async function requestGoogleCalendarAccessToken(): Promise<string> {
+  const { auth } = firebase();
+  const user = auth.currentUser;
+  const provider = new GoogleAuthProvider();
+  provider.addScope("https://www.googleapis.com/auth/calendar.events.readonly");
+  provider.setCustomParameters({ prompt: "consent" });
+  const result = user?.isAnonymous
+    ? await linkWithPopup(user, provider)
+    : user?.providerData.some((item) => item.providerId === "google.com")
+      ? await reauthenticateWithPopup(user, provider)
+      : user
+        ? await linkWithPopup(user, provider)
+        : await signInWithPopup(auth, provider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  if (!credential?.accessToken) throw new Error("Google Calendar 접근 토큰을 받지 못했습니다.");
+  return credential.accessToken;
 }

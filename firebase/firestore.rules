@@ -29,9 +29,9 @@ service cloud.firestore {
 
       match /votes/{voteId} {
         allow read: if participant(meetupId);
-        allow create, update: if participant(meetupId) &&
-          request.resource.data.participantUid == request.auth.uid;
-        allow delete: if signedIn() && resource.data.participantUid == request.auth.uid;
+        // Vote status and optional comments are validated by Cloud Functions
+        // so users cannot alter another response or bypass response deadlines.
+        allow write: if false;
       }
 
       // Exact origins are private: backend functions read them to calculate

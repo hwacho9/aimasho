@@ -3,12 +3,14 @@ export type VoteStatus = "YES" | "MAYBE" | "NO";
 export interface CandidateSlot {
   id: string;
   startDateTime: string;
+  createdByUid?: string;
 }
 
 export interface Vote {
   participantUid: string;
   slotId: string;
   status: VoteStatus;
+  comment?: string;
 }
 
 export interface SlotScore extends CandidateSlot {

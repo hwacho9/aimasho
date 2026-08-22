@@ -4,7 +4,7 @@ import { updateProfile } from "firebase/auth";
 import { collection, doc, onSnapshot, orderBy, query } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { ensureAnonymousUser, firebase, trackAnalyticsEvent } from "@/lib/firebase/client";
-import type { AvailabilityVote, CandidateSlot, Expense, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, Recommendation, RelationshipStat, Room, Settlement, VoteStatus } from "@/types/meetup";
+import type { AvailabilityVote, CandidateSlot, ContentCategory, ContentOption, ContentVote, ContentVoteConfig, Expense, FriendHistory, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, PlanItem, PlanItemStatus, PlanItemType, Recommendation, RelationshipStat, Room, RoomDetailData, ScheduleCondition, Settlement, VoteStatus } from "@/types/meetup";
 
 const callable = <Input, Output>(name: string) => httpsCallable<Input, Output>(firebase().functions, name);
 
@@ -21,7 +21,7 @@ export async function identify(name: string) {
   return user;
 }
 
-export async function createMeetup(input: { hostName: string; title: string; description?: string; durationMinutes: number; candidateSlots: string[]; roomId?: string }) {
+export async function createMeetup(input: { hostName: string; title: string; description?: string; durationMinutes: number; candidateSlots: string[]; roomId?: string; collectOrigins?: boolean; allowParticipantSlotAdd?: boolean; responseDeadline?: string; scheduleCondition?: ScheduleCondition; contentVoteConfig?: ContentVoteConfig; allowPlanEditing?: boolean }) {
   await identify(input.hostName);
   const { hostName, ...values } = input;
   const payload = { ...values, displayName: hostName };
@@ -42,9 +42,50 @@ export async function joinMeetup(meetupId: string, displayName: string) {
   trackAnalyticsEvent("meetup_joined");
 }
 
-export async function submitVote(meetupId: string, slotId: string, status: VoteStatus) {
+export async function submitVote(meetupId: string, slotId: string, status: VoteStatus, comment?: string) {
   await ensureAnonymousUser();
-  await callable<{ meetupId: string; slotId: string; status: VoteStatus }, { ok: true }>("upsertVote")({ meetupId, slotId, status });
+  await callable<{ meetupId: string; slotId: string; status: VoteStatus; comment?: string }, { ok: true }>("upsertVote")({ meetupId, slotId, status, ...(comment?.trim() ? { comment: comment.trim() } : {}) });
+}
+
+export async function addCandidateSlot(meetupId: string, startDateTime: string) {
+  await ensureAnonymousUser();
+  await callable<{ meetupId: string; startDateTime: string }, { id: string; startDateTime: string }>("addCandidateSlot")({ meetupId, startDateTime });
+  trackAnalyticsEvent("candidate_slot_added");
+}
+
+export async function toggleContentVote(meetupId: string, optionId: string, selected: boolean) {
+  await callable<{ meetupId: string; optionId: string; selected: boolean }, { selected: boolean }>("toggleContentVote")({ meetupId, optionId, selected });
+  trackAnalyticsEvent("content_vote_updated");
+}
+
+export async function addContentOption(meetupId: string, category: ContentCategory, label: string) {
+  await callable<{ meetupId: string; category: ContentCategory; label: string }, { id: string }>("addContentOption")({ meetupId, category, label });
+}
+
+export type PlanItemInput = { type: PlanItemType; title: string; place?: Location; scheduledAt?: string; note?: string; source?: "manual" | "vote" | "recommendation" };
+export async function createPlanItem(meetupId: string, item: PlanItemInput) {
+  const response = await callable<{ meetupId: string; item: PlanItemInput }, { id: string }>("createPlanItem")({ meetupId, item });
+  trackAnalyticsEvent("plan_item_created");
+  return response.data.id;
+}
+export async function updatePlanItem(meetupId: string, itemId: string, item: PlanItemInput) {
+  await callable<{ meetupId: string; itemId: string; item: PlanItemInput }, { id: string }>("updatePlanItem")({ meetupId, itemId, item });
+}
+export async function deletePlanItem(meetupId: string, itemId: string) {
+  await callable<{ meetupId: string; itemId: string }, { id: string }>("deletePlanItem")({ meetupId, itemId });
+}
+export async function reorderPlanItems(meetupId: string, itemIds: string[]) {
+  await callable<{ meetupId: string; itemIds: string[] }, { ok: true }>("reorderPlanItems")({ meetupId, itemIds });
+}
+export async function setPlanItemStatus(meetupId: string, itemId: string, status: PlanItemStatus) {
+  await callable<{ meetupId: string; itemId: string; status: PlanItemStatus }, { status: PlanItemStatus }>("setPlanItemStatus")({ meetupId, itemId, status });
+}
+export async function completeMeetup(meetupId: string) {
+  await callable<{ meetupId: string }, { status: string }>("completeMeetup")({ meetupId });
+  trackAnalyticsEvent("meetup_completed");
+}
+export async function cancelMeetup(meetupId: string) {
+  await callable<{ meetupId: string }, { status: string }>("cancelMeetup")({ meetupId });
 }
 
 export async function getRecommendation(meetupId: string): Promise<Recommendation> {
@@ -139,6 +180,11 @@ export async function getMyRelationships(): Promise<RelationshipStat[]> {
   return response.data.relationships;
 }
 
+export async function getFriendHistory(otherUid: string): Promise<FriendHistory> {
+  const response = await callable<{ otherUid: string }, FriendHistory>("getFriendHistory")({ otherUid });
+  return response.data;
+}
+
 export async function saveDefaultOrigin(defaultOrigin: Location) {
   await callable<{ defaultOrigin: Location }, { defaultOrigin: Location }>("saveDefaultOrigin")({ defaultOrigin });
 }
@@ -165,8 +211,8 @@ export async function getRoomInvitePreview(inviteCode: string) {
   return response.data;
 }
 
-export async function getRoomDetail(roomId: string): Promise<{ room: { id: string; name: string; inviteCode: string; ownerUid: string }; members: Array<{ uid: string; displayName: string; role: "OWNER" | "MEMBER" }>; meetups: Array<{ id: string; title: string; status: string; confirmedDateTime: string | null }> }> {
-  const response = await callable<{ roomId: string }, { room: { id: string; name: string; inviteCode: string; ownerUid: string }; members: Array<{ uid: string; displayName: string; role: "OWNER" | "MEMBER" }>; meetups: Array<{ id: string; title: string; status: string; confirmedDateTime: string | null }> }>("getRoomDetail")({ roomId });
+export async function getRoomDetail(roomId: string): Promise<RoomDetailData> {
+  const response = await callable<{ roomId: string }, RoomDetailData>("getRoomDetail")({ roomId });
   return response.data;
 }
 
@@ -178,8 +224,11 @@ export function subscribeToMeetup(meetupId: string, onData: (data: MeetupDetail)
   let votes: AvailabilityVote[] = [];
   let routes: ParticipantRoute[] = [];
   let expenses: Expense[] = [];
+  let contentOptions: ContentOption[] = [];
+  let contentVotes: ContentVote[] = [];
+  let planItems: PlanItem[] = [];
   const publish = () => {
-    if (meetup) onData({ meetup, participants, candidateSlots, votes, routes, expenses });
+    if (meetup) onData({ meetup, participants, candidateSlots, votes, routes, expenses, contentOptions, contentVotes, planItems });
   };
   const base = doc(db, "meetups", meetupId);
   const stops = [
@@ -193,6 +242,14 @@ export function subscribeToMeetup(meetupId: string, onData: (data: MeetupDetail)
         createdByUid: item.createdByUid,
         status: item.status,
         durationMinutes: item.durationMinutes,
+        collectOrigins: item.collectOrigins !== false,
+        allowParticipantSlotAdd: item.allowParticipantSlotAdd === true,
+        responseDeadline: dateString(item.responseDeadline),
+        scheduleCondition: item.scheduleCondition,
+        contentVoteConfig: item.contentVoteConfig,
+        allowPlanEditing: item.allowPlanEditing === true,
+        completedAt: dateString(item.completedAt),
+        cancelledAt: dateString(item.cancelledAt),
         confirmedDateTime: dateString(item.confirmedDateTime),
         previousConfirmedDateTime: dateString(item.previousConfirmedDateTime),
         scheduleChangedAt: dateString(item.scheduleChangedAt),
@@ -207,11 +264,11 @@ export function subscribeToMeetup(meetupId: string, onData: (data: MeetupDetail)
       publish();
     }, onError),
     onSnapshot(query(collection(base, "candidateSlots"), orderBy("startDateTime")), (snapshot) => {
-      candidateSlots = snapshot.docs.map((item) => ({ id: item.id, startDateTime: dateString(item.data().startDateTime) ?? "" }));
+      candidateSlots = snapshot.docs.map((item) => ({ id: item.id, startDateTime: dateString(item.data().startDateTime) ?? "", createdByUid: item.data().createdByUid }));
       publish();
     }, onError),
     onSnapshot(collection(base, "votes"), (snapshot) => {
-      votes = snapshot.docs.map((item) => item.data() as AvailabilityVote);
+      votes = snapshot.docs.map((item) => ({ ...item.data(), comment: typeof item.data().comment === "string" ? item.data().comment : undefined }) as AvailabilityVote);
       publish();
     }, onError),
     onSnapshot(collection(base, "routes"), (snapshot) => {
@@ -220,6 +277,18 @@ export function subscribeToMeetup(meetupId: string, onData: (data: MeetupDetail)
     }, onError),
     onSnapshot(collection(base, "expenses"), (snapshot) => {
       expenses = snapshot.docs.map((item) => item.data() as Expense);
+      publish();
+    }, onError),
+    onSnapshot(collection(base, "contentOptions"), (snapshot) => {
+      contentOptions = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as ContentOption);
+      publish();
+    }, onError),
+    onSnapshot(collection(base, "contentVotes"), (snapshot) => {
+      contentVotes = snapshot.docs.map((item) => item.data() as ContentVote);
+      publish();
+    }, onError),
+    onSnapshot(query(collection(base, "planItems"), orderBy("order")), (snapshot) => {
+      planItems = snapshot.docs.map((item) => ({ id: item.id, ...item.data(), scheduledAt: dateString(item.data().scheduledAt), completedAt: dateString(item.data().completedAt) }) as PlanItem);
       publish();
     }, onError),
   ];
