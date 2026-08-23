@@ -101,7 +101,25 @@ export async function continueWithGoogle(): Promise<User> {
   const { auth } = firebase();
   const provider = new GoogleAuthProvider();
   const current = auth.currentUser;
-  if (current?.isAnonymous) return (await linkWithPopup(current, provider)).user;
+
+  // When Firebase restores an existing Google session, opening another popup
+  // makes the login button look unresponsive. The signed-in user is already
+  // the result we need.
+  if (current && !current.isAnonymous && current.providerData.some((item) => item.providerId === "google.com")) return current;
+
+  if (current?.isAnonymous) {
+    try {
+      return (await linkWithPopup(current, provider)).user;
+    } catch (caught) {
+      // A guest may try to connect a Google account that was used before.
+      // Linking cannot merge two Firebase users, but signing into that account
+      // is still a valid login and must not leave the UI on the same screen.
+      const code = typeof caught === "object" && caught && "code" in caught ? String(caught.code) : "";
+      if (code !== "auth/credential-already-in-use" && code !== "auth/email-already-in-use") throw caught;
+      return (await signInWithPopup(auth, provider)).user;
+    }
+  }
+
   return (await signInWithPopup(auth, provider)).user;
 }
 

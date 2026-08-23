@@ -1,26 +1,58 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import { useLanguage } from "@/components/language-provider";
-import { continueWithGoogle } from "@/lib/firebase/client";
+import { continueWithGoogle, firebase } from "@/lib/firebase/client";
 import { saveProfile } from "@/services/meetup-repository";
 
 export function LoginCard() {
-  const router = useRouter();
   const { language } = useLanguage();
   const korean = language === "ko";
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string>();
+  const completionStarted = useRef(false);
+
+  const finishLogin = async (user: User) => {
+    if (completionStarted.current) return;
+    completionStarted.current = true;
+    setIsSubmitting(true);
+    setError(undefined);
+    try {
+      // After linking an anonymous user, force a fresh ID token so the
+      // callable function sees the Google sign-in provider immediately.
+      await user.getIdToken(true);
+      await saveProfile(user.displayName || (korean ? "aimasho 사용자" : "aimasho ユーザー"));
+      window.location.replace("/profile");
+    } catch (caught) {
+      completionStarted.current = false;
+      const code = typeof caught === "object" && caught && "code" in caught ? String(caught.code) : "";
+      setError(code.startsWith("functions/")
+        ? korean ? "로그인은 완료됐지만 프로필 저장에 실패했어요. 잠시 후 다시 시도해 주세요." : "ログインは完了しましたが、プロフィールの保存に失敗しました。少し待ってからもう一度お試しください。"
+        : korean ? "로그인 완료 처리를 하지 못했어요. 다시 시도해 주세요." : "ログインの完了処理に失敗しました。もう一度お試しください。");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    // This also completes a login if the popup has already authenticated the
+    // user but the page was left open by the browser.
+    const stop = onAuthStateChanged(firebase().auth, (user) => {
+      if (user && !user.isAnonymous) void finishLogin(user);
+    });
+    return () => stop();
+  // finishLogin intentionally uses the language visible when this page opens.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const signIn = async () => {
     setIsSubmitting(true);
     setError(undefined);
     try {
       const user = await continueWithGoogle();
-      await saveProfile(user.displayName || (korean ? "aimasho 사용자" : "aimasho ユーザー"));
-      router.replace("/profile");
+      await finishLogin(user);
     } catch (caught) {
       const code = typeof caught === "object" && caught && "code" in caught ? String(caught.code) : "";
       setError(code === "auth/popup-closed-by-user"
