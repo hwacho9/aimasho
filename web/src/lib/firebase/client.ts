@@ -14,6 +14,7 @@ interface FirebaseServices {
 
 let emulatorConnected = false;
 let analyticsPromise: Promise<Analytics | null> | undefined;
+let anonymousSignInPromise: Promise<User> | undefined;
 
 // Next.js replaces public environment variables in browser bundles only when
 // they are referenced statically. Do not use process.env[name] here: that
@@ -93,13 +94,25 @@ export function trackAnalyticsEvent(name: string): void {
 
 export async function ensureAnonymousUser(): Promise<User> {
   const { auth } = firebase();
-  return auth.currentUser ?? (await signInAnonymously(auth)).user;
+  // Firebase restores LOCAL auth persistence asynchronously on page load.
+  // Creating a guest before this resolves replaces a remembered Google user,
+  // which makes a refresh look like a logout.
+  await auth.authStateReady();
+  if (auth.currentUser) return auth.currentUser;
+
+  anonymousSignInPromise ??= signInAnonymously(auth).then((result) => result.user);
+  try {
+    return await anonymousSignInPromise;
+  } finally {
+    anonymousSignInPromise = undefined;
+  }
 }
 
 /** Upgrades the anonymous account in place so meetup relationships remain intact. */
 export async function continueWithGoogle(): Promise<User> {
   const { auth } = firebase();
   const provider = new GoogleAuthProvider();
+  await auth.authStateReady();
   const current = auth.currentUser;
 
   // When Firebase restores an existing Google session, opening another popup
@@ -130,6 +143,7 @@ export async function continueWithGoogle(): Promise<User> {
  */
 export async function requestGoogleCalendarAccessToken(): Promise<string> {
   const { auth } = firebase();
+  await auth.authStateReady();
   const user = auth.currentUser;
   const provider = new GoogleAuthProvider();
   provider.addScope("https://www.googleapis.com/auth/calendar.events.readonly");
