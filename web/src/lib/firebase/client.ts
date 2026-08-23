@@ -2,7 +2,7 @@
 
 import { FirebaseApp, getApp, getApps, initializeApp } from "firebase/app";
 import { getAnalytics, isSupported, logEvent, type Analytics } from "firebase/analytics";
-import { Auth, connectAuthEmulator, getAuth, GoogleAuthProvider, linkWithPopup, reauthenticateWithPopup, signInAnonymously, signInWithPopup, User } from "firebase/auth";
+import { Auth, browserLocalPersistence, browserSessionPersistence, connectAuthEmulator, getAuth, GoogleAuthProvider, linkWithPopup, reauthenticateWithPopup, setPersistence, signInAnonymously, signInWithPopup, User } from "firebase/auth";
 import { connectFirestoreEmulator, Firestore, getFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, Functions, getFunctions } from "firebase/functions";
 
@@ -15,6 +15,7 @@ interface FirebaseServices {
 let emulatorConnected = false;
 let analyticsPromise: Promise<Analytics | null> | undefined;
 let anonymousSignInPromise: Promise<User> | undefined;
+let authInitializationPromise: Promise<Auth> | undefined;
 
 // Next.js replaces public environment variables in browser bundles only when
 // they are referenced statically. Do not use process.env[name] here: that
@@ -64,6 +65,25 @@ export function firebase(): FirebaseServices {
 }
 
 /**
+ * Restores Firebase Auth before any page decides whether the visitor is a
+ * guest. Explicit LOCAL persistence keeps the Google session across reloads;
+ * SESSION is used only when the browser blocks durable local storage.
+ */
+export function prepareFirebaseAuth(): Promise<Auth> {
+  authInitializationPromise ??= (async () => {
+    const { auth } = firebase();
+    try {
+      await setPersistence(auth, browserLocalPersistence);
+    } catch {
+      await setPersistence(auth, browserSessionPersistence);
+    }
+    await auth.authStateReady();
+    return auth;
+  })();
+  return authInitializationPromise;
+}
+
+/**
  * Analytics is optional so the app remains usable in local Firebase/emulator
  * setups. It is deliberately disabled for emulators because their test events
  * should never reach the production Analytics property.
@@ -93,11 +113,10 @@ export function trackAnalyticsEvent(name: string): void {
 }
 
 export async function ensureAnonymousUser(): Promise<User> {
-  const { auth } = firebase();
+  const auth = await prepareFirebaseAuth();
   // Firebase restores LOCAL auth persistence asynchronously on page load.
   // Creating a guest before this resolves replaces a remembered Google user,
   // which makes a refresh look like a logout.
-  await auth.authStateReady();
   if (auth.currentUser) return auth.currentUser;
 
   anonymousSignInPromise ??= signInAnonymously(auth).then((result) => result.user);
@@ -110,9 +129,8 @@ export async function ensureAnonymousUser(): Promise<User> {
 
 /** Upgrades the anonymous account in place so meetup relationships remain intact. */
 export async function continueWithGoogle(): Promise<User> {
-  const { auth } = firebase();
+  const auth = await prepareFirebaseAuth();
   const provider = new GoogleAuthProvider();
-  await auth.authStateReady();
   const current = auth.currentUser;
 
   // When Firebase restores an existing Google session, opening another popup
@@ -142,8 +160,7 @@ export async function continueWithGoogle(): Promise<User> {
  * is never sent to Firestore or Cloud Functions.
  */
 export async function requestGoogleCalendarAccessToken(): Promise<string> {
-  const { auth } = firebase();
-  await auth.authStateReady();
+  const auth = await prepareFirebaseAuth();
   const user = auth.currentUser;
   const provider = new GoogleAuthProvider();
   provider.addScope("https://www.googleapis.com/auth/calendar.events.readonly");

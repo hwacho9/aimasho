@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { AnalyticsProvider } from "@/components/analytics-provider";
+import { AuthProvider } from "@/components/auth-provider";
 import { LanguageProvider } from "@/components/language-provider";
 
 export const metadata: Metadata = {
@@ -18,7 +19,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="ko" className="h-full antialiased">
-      <body className="min-h-full flex flex-col"><AnalyticsProvider><LanguageProvider>{children}</LanguageProvider></AnalyticsProvider></body>
+      <body className="min-h-full flex flex-col"><AnalyticsProvider><LanguageProvider><AuthProvider>{children}</AuthProvider></LanguageProvider></AnalyticsProvider></body>
     </html>
   );
 }

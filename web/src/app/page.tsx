@@ -1,29 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { onAuthStateChanged, type User } from "firebase/auth";
-import { useEffect, useState } from "react";
+import { useAuth } from "@/components/auth-provider";
 import { LanguageSelect, useLanguage } from "@/components/language-provider";
 import { HomeDashboard } from "@/components/home-dashboard";
-import { firebase } from "@/lib/firebase/client";
 
 export default function Home() {
   const { language } = useLanguage();
+  const { user, loading } = useAuth();
   const korean = language === "ko";
-  const [user, setUser] = useState<User | null | undefined>(undefined);
-
-  useEffect(() => {
-    const auth = firebase().auth;
-    const stop = onAuthStateChanged(auth, (nextUser) => setUser(nextUser));
-    return () => stop();
-  }, []);
 
   const signedIn = Boolean(user && !user.isAnonymous);
   const accountName = user?.displayName || (korean ? "내 계정" : "マイアカウント");
 
   return (
     <main className="landing">
-      <nav className="top-nav"><Link className="brand" href="/" aria-label="aimasho home"><span className="brand-mark">a</span><span>aimasho</span></Link><div className="header-controls">{user === undefined ? <span className="nav-note" aria-label={korean ? "로그인 상태 확인 중" : "ログイン状態を確認中"}>…</span> : signedIn ? <Link className="nav-note signed-in-link" href="/profile">✓ {accountName} · {korean ? "내 약속" : "マイ予定"}</Link> : <><Link className="nav-note" href="/login">{korean ? "로그인" : "ログイン"}</Link><Link className="nav-note" href="/profile">{korean ? "내 약속" : "マイ予定"}</Link></>}<LanguageSelect /></div></nav>
+      <nav className="top-nav"><Link className="brand" href="/" aria-label="aimasho home"><span className="brand-mark">a</span><span>aimasho</span></Link><div className="header-controls">{loading ? <span className="nav-note" aria-label={korean ? "로그인 상태 확인 중" : "ログイン状態を確認中"}>…</span> : signedIn ? <Link className="nav-note signed-in-link" href="/profile">✓ {accountName} · {korean ? "내 약속" : "マイ予定"}</Link> : <><Link className="nav-note" href="/login">{korean ? "로그인" : "ログイン"}</Link><Link className="nav-note" href="/profile">{korean ? "내 약속" : "マイ予定"}</Link></>}<LanguageSelect /></div></nav>
       <section className="landing-hero">
         <div className="floating-dot dot-one" /><div className="floating-dot dot-two" /><div className="sun-orb">☀</div>
         <p className="eyebrow">{korean ? "약속을 더 쉽게" : "予定をもっと気軽に"}</p>
