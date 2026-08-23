@@ -4,7 +4,7 @@ import { updateProfile } from "firebase/auth";
 import { collection, doc, onSnapshot, orderBy, query } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { ensureAnonymousUser, firebase, trackAnalyticsEvent } from "@/lib/firebase/client";
-import type { AvailabilityVote, CandidateSlot, ContentCategory, ContentOption, ContentVote, ContentVoteConfig, Expense, FriendHistory, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, PlanItem, PlanItemStatus, PlanItemType, Recommendation, RelationshipStat, Room, RoomDetailData, ScheduleCondition, Settlement, VoteStatus } from "@/types/meetup";
+import type { AvailabilityVote, CandidateSlot, ContentCategory, ContentOption, ContentVote, ContentVoteConfig, Expense, FriendHistory, HomeDashboardData, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, PlanItem, PlanItemStatus, PlanItemType, Recommendation, RelationshipStat, Room, RoomDetailData, ScheduleCondition, Settlement, VoteStatus } from "@/types/meetup";
 
 const callable = <Input, Output>(name: string) => httpsCallable<Input, Output>(firebase().functions, name);
 
@@ -198,6 +198,11 @@ export async function createRoom(name: string, displayName: string) {
 export async function getMyRooms(): Promise<Room[]> {
   const response = await callable<Record<string, never>, { rooms: Room[] }>("getMyRooms")({});
   return response.data.rooms;
+}
+
+export async function getMyDashboard(): Promise<HomeDashboardData> {
+  const response = await callable<Record<string, never>, HomeDashboardData>("getMyDashboard")({});
+  return response.data;
 }
 
 export async function joinRoom(inviteCode: string, displayName: string) {

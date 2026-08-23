@@ -19,7 +19,7 @@ export function ContentVotingPanel({ meetupId, detail, currentUid }: { meetupId:
   const config = detail.meetup.contentVoteConfig;
   const enabled = (["FOOD", "ACTIVITY"] as ContentCategory[]).filter((category) => category === "FOOD" ? config?.food : config?.activity);
   const totals = useMemo(() => new Map(detail.contentOptions.map((option) => [option.id, detail.contentVotes.filter((vote) => vote.optionId === option.id).length])), [detail.contentOptions, detail.contentVotes]);
-  if (enabled.length === 0 || detail.meetup.status === "SCHEDULING" || detail.meetup.status === "COMPLETED" || detail.meetup.status === "CANCELLED") return null;
+  if (enabled.length === 0 || detail.meetup.status === "COMPLETED" || detail.meetup.status === "CANCELLED") return null;
   const toggle = async (optionId: string, selected: boolean) => {
     setBusyOption(optionId); setError(undefined);
     try { await toggleContentVote(meetupId, optionId, selected); }

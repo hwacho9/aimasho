@@ -155,8 +155,27 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
   const { meetup, participants, candidateSlots, votes } = detail;
   const cancelled = meetup.status === "CANCELLED";
   const confirmed = meetup.status !== "SCHEDULING" && !cancelled;
+  const finished = meetup.status === "COMPLETED" || cancelled;
   const confirmedTimeInput = meetup.confirmedDateTime ? tokyoDateTimeInput(meetup.confirmedDateTime) : "";
   const scheduleInputValue = scheduledTimeInput || confirmedTimeInput;
+  const renderVoteSlot = (slot: (typeof candidateSlots)[number]) => {
+    const result = recommendation?.ranking.find((item) => item.id === slot.id);
+    const isRecommended = recommendation?.recommended?.id === slot.id && !confirmed;
+    const voteGroups = (["YES", "MAYBE", "NO"] as VoteStatus[]).map((status) => ({ status, voters: votes.filter((vote) => vote.slotId === slot.id && vote.status === status) }));
+    const myVote = votes.find((vote) => vote.slotId === slot.id && vote.participantUid === uid);
+    const creator = slot.createdByUid ? participants.find((participant) => participant.uid === slot.createdByUid) : undefined;
+    const isChosen = meetup.confirmedDateTime === slot.startDateTime;
+    return <article className={`slot-card ${isRecommended ? "recommended" : ""} ${isChosen ? "confirmed" : ""}`} key={slot.id}>
+      <div className="slot-date"><span>{displayDate(slot.startDateTime)}</span>{isChosen ? <b>{korean ? "결정된 일정" : "決定した日程"}</b> : isRecommended ? <b>{korean ? "aimasho 추천" : "aimasho おすすめ"}</b> : null}</div>
+      {creator && creator.uid !== meetup.createdByUid && <p className="candidate-owner">{korean ? `${creator.displayName}님이 제안` : `${creator.displayName}さんが提案`}</p>}
+      {result && <div className="vote-summary"><span className="yes">○ {result.yes}</span><span className="maybe">△ {result.maybe}</span><span className="no">× {result.no}</span>{result.no === 0 && result.yes === participants.length && <small>{korean ? "모두 가능해요!" : "全員参加できます！"}</small>}</div>}
+      {votes.some((vote) => vote.slotId === slot.id) && <div className="vote-people">{voteGroups.map(({ status, voters: grouped }) => grouped.length > 0 && <div className={`vote-person-row ${status.toLowerCase()}`} key={status}><b>{status === "YES" ? "○" : status === "MAYBE" ? "△" : "×"}</b>{grouped.map((item) => <span className="vote-person-chip" key={item.participantUid}><strong>{participants.find((participant) => participant.uid === item.participantUid)?.displayName ?? (korean ? "알 수 없음" : "不明")}</strong>{item.comment && <small>“{item.comment}”</small>}</span>)}</div>)}</div>}
+      {me && !finished && <SlotVoteEditor vote={myVote} onVote={(status, comment) => void vote(slot.id, status, comment)} disabled={busySlot === slot.id} />}
+      {!confirmed && isHost && <button className="text-button schedule-slot-change" type="button" disabled={Boolean(busySlot)} onClick={() => void confirm(slot.id)}>{busySlot === slot.id ? korean ? "확정 중..." : "確定中…" : korean ? "이 일정으로 결정" : "この日程で決定"}</button>}
+      {confirmed && isHost && !finished && !isChosen && <button className="text-button schedule-slot-change" type="button" disabled={busySlot === "schedule-change"} onClick={() => { const next = tokyoDateTimeInput(slot.startDateTime); setScheduledTimeInput(next); void changeConfirmedTime(next); }}>{korean ? "이 시간으로 변경" : "この日時に変更"}</button>}
+    </article>;
+  };
+  const candidateAddCard = (isHost || meetup.allowParticipantSlotAdd) && me && !finished ? <section className="candidate-add-card"><div><p className="eyebrow">{korean ? "후보 제안" : "候補を提案"}</p><h3>{korean ? "새 날짜·시간 추가" : "新しい日時を追加"}</h3><p>{korean ? "확정 후에도 후보를 추가하고 투표 결과를 다시 정리할 수 있어요." : "確定後も候補を追加し、投票結果を見直せます。"}</p></div><div><input type="datetime-local" aria-label={korean ? "새 후보 날짜와 시간" : "新しい候補日時"} value={newCandidateDateTime} onChange={(event) => setNewCandidateDateTime(event.target.value)} /><button className="secondary-button" type="button" disabled={!newCandidateDateTime || candidateBusy} onClick={() => void addCandidate()}>{candidateBusy ? korean ? "추가 중..." : "追加中…" : korean ? "후보 추가" : "候補を追加"}</button></div></section> : null;
 
   return <main className="meetup-page">
     <section className="meetup-hero">
@@ -169,34 +188,17 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
       {relationships.length > 0 && <div className="meetup-relationships">{relationships.map((relationship) => <div className="meetup-relationship" key={relationship.otherUid}><div><b>{relationship.displayName}</b><small>{korean ? `함께한 약속 ${relationship.sharedMeetupCount}회` : `一緒の予定 ${relationship.sharedMeetupCount}回`}</small></div><em>{relationshipLabel(relationship.sharedMeetupCount, korean)}</em></div>)}</div>}
     </section>
 
-    {confirmed && meetup.confirmedDateTime && <ConfirmedScheduleResponse meetupId={meetupId} participants={participants} currentUid={uid} confirmedDateTime={meetup.confirmedDateTime} previousConfirmedDateTime={meetup.previousConfirmedDateTime} />}
+    {confirmed && !finished && meetup.confirmedDateTime && <ConfirmedScheduleResponse meetupId={meetupId} participants={participants} currentUid={uid} confirmedDateTime={meetup.confirmedDateTime} previousConfirmedDateTime={meetup.previousConfirmedDateTime} />}
     {isHost && !confirmed && <ShareCard meetupId={meetupId} title={meetup.title} />}
 
     <section className="schedule-section">
       <div className="section-heading"><div><p className="eyebrow">{korean ? "언제" : "いつ"}</p><h2>{cancelled ? korean ? "취소된 일정" : "中止された予定" : confirmed ? korean ? "정해진 일정" : "決まった予定" : korean ? "언제가 좋아요?" : "いつがいい？"}</h2></div><span>{votes.length}/{participants.length * candidateSlots.length} {korean ? "응답" : "回答"}</span></div>
       {!confirmed && meetup.responseDeadline && <p className="response-deadline">{korean ? "응답 마감" : "回答期限"} <b>{displayDate(meetup.responseDeadline)}</b></p>}
-      {candidateSlots.map((slot) => {
-        const result = recommendation?.ranking.find((item) => item.id === slot.id);
-        const isRecommended = recommendation?.recommended?.id === slot.id && !confirmed;
-        const voteGroups = (["YES", "MAYBE", "NO"] as VoteStatus[]).map((status) => ({
-          status,
-          voters: votes.filter((vote) => vote.slotId === slot.id && vote.status === status),
-        }));
-        const myVote = votes.find((vote) => vote.slotId === slot.id && vote.participantUid === uid);
-        const creator = slot.createdByUid ? participants.find((participant) => participant.uid === slot.createdByUid) : undefined;
-        return <article className={`slot-card ${isRecommended ? "recommended" : ""} ${meetup.confirmedDateTime === slot.startDateTime ? "confirmed" : ""}`} key={slot.id}>
-          <div className="slot-date"><span>{displayDate(slot.startDateTime)}</span>{isRecommended && <b>{korean ? "aimasho 추천" : "aimasho おすすめ"}</b>}</div>
-          {creator && creator.uid !== meetup.createdByUid && <p className="candidate-owner">{korean ? `${creator.displayName}님이 제안` : `${creator.displayName}さんが提案`}</p>}
-          {result && <div className="vote-summary"><span className="yes">○ {result.yes}</span><span className="maybe">△ {result.maybe}</span><span className="no">× {result.no}</span>{result.no === 0 && result.yes === participants.length && <small>{korean ? "모두 가능해요!" : "全員参加できます！"}</small>}</div>}
-          {votes.some((vote) => vote.slotId === slot.id) && <div className="vote-people">{voteGroups.map(({ status, voters }) => voters.length > 0 && <div className={`vote-person-row ${status.toLowerCase()}`} key={status}><b>{status === "YES" ? "○" : status === "MAYBE" ? "△" : "×"}</b>{voters.map((item) => <span className="vote-person-chip" key={item.participantUid}><strong>{participants.find((participant) => participant.uid === item.participantUid)?.displayName ?? (korean ? "알 수 없음" : "不明")}</strong>{item.comment && <small>“{item.comment}”</small>}</span>)}</div>)}</div>}
-          {!confirmed && me && <SlotVoteEditor vote={myVote} onVote={(status, comment) => void vote(slot.id, status, comment)} disabled={busySlot === slot.id} />}
-          {!confirmed && isHost && <button className="text-button schedule-slot-change" type="button" disabled={Boolean(busySlot)} onClick={() => void confirm(slot.id)}>{busySlot === slot.id ? korean ? "확정 중..." : "確定中…" : korean ? "이 일정으로 결정" : "この日程で決定"}</button>}
-          {confirmed && isHost && meetup.confirmedDateTime !== slot.startDateTime && <button className="text-button schedule-slot-change" type="button" disabled={busySlot === "schedule-change"} onClick={() => { const next = tokyoDateTimeInput(slot.startDateTime); setScheduledTimeInput(next); void changeConfirmedTime(next); }}>{korean ? "이 시간으로 변경" : "この日時に変更"}</button>}
-        </article>;
-      })}
-      {!confirmed && meetup.allowParticipantSlotAdd && me && <section className="candidate-add-card"><div><p className="eyebrow">{korean ? "후보 제안" : "候補を提案"}</p><h3>{korean ? "새 날짜·시간 추가" : "新しい日時を追加"}</h3><p>{korean ? "추가한 후보에도 모두가 같은 방식으로 응답할 수 있어요." : "追加した候補にも、みんなが同じように回答できます。"}</p></div><div><input type="datetime-local" aria-label={korean ? "새 후보 날짜와 시간" : "新しい候補日時"} value={newCandidateDateTime} onChange={(event) => setNewCandidateDateTime(event.target.value)} /><button className="secondary-button" type="button" disabled={!newCandidateDateTime || candidateBusy} onClick={() => void addCandidate()}>{candidateBusy ? korean ? "추가 중..." : "追加中…" : korean ? "후보 추가" : "候補を追加"}</button></div></section>}
+      {confirmed && meetup.confirmedDateTime ? <article className="finalized-schedule"><span className="finalized-date-mark">✓</span><div><p>{korean ? "결정된 일정" : "決定した日程"}</p><h3>{displayDate(meetup.confirmedDateTime)}</h3><small>{meetup.meetingPlace ? `📍 ${meetup.meetingPlace.name}` : korean ? "장소는 별도로 계속 정할 수 있어요" : "場所は別に引き続き決められます"}</small></div></article> : candidateSlots.map(renderVoteSlot)}
+      {confirmed && <details className="schedule-wrapup"><summary><span>{korean ? "투표 결과와 다른 후보" : "投票結果と他の候補"}</span><b>{candidateSlots.length}{korean ? "개 후보 · 언제든 다시 수정" : "件・いつでも再編集"}</b></summary><div className="schedule-wrapup-content">{candidateSlots.map(renderVoteSlot)}{candidateAddCard}</div></details>}
+      {!confirmed && candidateAddCard}
       {!me && <p className="empty-note">{korean ? "참여하면 투표할 수 있어요." : "参加すると投票できます。"}</p>}
-      {confirmed && isHost && <section className="schedule-change-card"><div><p className="eyebrow">{korean ? "호스트 설정" : "ホスト設定"}</p><h3>{korean ? "집합 날짜·시간 변경" : "集合日時を変更"}</h3><p>{korean ? "날짜와 시간은 변경할 수 있어요. 출발·도착 시간 계산과 출발 알림은 현재 비활성화되어 있어요." : "日時は変更できます。出発・到着時刻の計算と出発通知は現在停止しています。"}</p></div><div className="schedule-change-form"><input aria-label={korean ? "집합 날짜와 시간" : "集合日時"} type="datetime-local" value={scheduleInputValue} onChange={(event) => setScheduledTimeInput(event.target.value)} /><button className="secondary-button" type="button" disabled={!scheduleInputValue || busySlot === "schedule-change"} onClick={() => void changeConfirmedTime(scheduleInputValue)}>{busySlot === "schedule-change" ? korean ? "변경 중..." : "変更中…" : korean ? "시간 변경" : "日時を変更"}</button></div></section>}
+      {confirmed && isHost && !finished && <section className="schedule-change-card"><div><p className="eyebrow">{korean ? "호스트 설정" : "ホスト設定"}</p><h3>{korean ? "집합 날짜·시간 변경" : "集合日時を変更"}</h3><p>{korean ? "날짜와 시간은 언제든 바꿀 수 있고, 장소와 당일 플랜도 독립적으로 수정할 수 있어요." : "日時はいつでも変更でき、場所と当日のプランも個別に編集できます。"}</p></div><div className="schedule-change-form"><input aria-label={korean ? "집합 날짜와 시간" : "集合日時"} type="datetime-local" value={scheduleInputValue} onChange={(event) => setScheduledTimeInput(event.target.value)} /><button className="secondary-button" type="button" disabled={!scheduleInputValue || busySlot === "schedule-change"} onClick={() => void changeConfirmedTime(scheduleInputValue)}>{busySlot === "schedule-change" ? korean ? "변경 중..." : "変更中…" : korean ? "시간 변경" : "日時を変更"}</button></div></section>}
     </section>
 
     {!confirmed && isHost && recommendation?.recommended && <section className="recommendation-box"><div><span className="recommendation-star">✦</span><div><p className="eyebrow">{korean ? "AIMASHO 추천" : "AIMASHO おすすめ"}</p><h2>{displayDate(recommendation.recommended.startDateTime)}</h2><p>{korean ? "불가능한 사람이 가장 적고, 가장 많은 친구가 참여할 수 있어요." : "参加できない人が最も少なく、いちばん多くの友だちが参加できます。"}</p></div></div><button className="primary-button" type="button" onClick={() => void confirm(recommendation.recommended!.id)} disabled={Boolean(busySlot)}>{korean ? "추천 일정으로 결정" : "おすすめの日程で決定"}</button></section>}

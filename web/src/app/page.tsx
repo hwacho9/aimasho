@@ -4,6 +4,7 @@ import Link from "next/link";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { useEffect, useState } from "react";
 import { LanguageSelect, useLanguage } from "@/components/language-provider";
+import { HomeDashboard } from "@/components/home-dashboard";
 import { firebase } from "@/lib/firebase/client";
 
 export default function Home() {
@@ -32,6 +33,7 @@ export default function Home() {
         <p className="guest-note">{signedIn ? <><span>{korean ? `${accountName}님으로 로그인되어 있어요.` : `${accountName} さんでログインしています。`}</span><Link className="guest-login-link" href="/profile">{korean ? "내 약속 보기" : "マイ予定を見る"}</Link></> : <><span>{korean ? "로그인 없이도 바로 시작할 수 있어요" : "ログインなしですぐに始められます"}</span><Link className="guest-login-link" href="/login">{korean ? "이미 계정이 있나요? 로그인" : "アカウントをお持ちの方はログイン"}</Link></>}</p>
       </section>
       <section className="flow-strip"><span>{korean ? "언제 만날까?" : "いつ会う？"}</span><i>→</i><span>{korean ? "어디서 만날까?" : "どこで会う？"}</span><i>→</i><span>{korean ? "약속을 확정하자" : "予定を決めよう"}</span></section>
+      {signedIn && <HomeDashboard />}
     </main>
   );
 }

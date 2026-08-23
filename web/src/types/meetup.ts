@@ -200,6 +200,8 @@ export interface Room {
   name: string;
   inviteCode: string;
   role: "OWNER" | "MEMBER";
+  completedMeetupCount?: number;
+  nextMeetupDate?: string | null;
 }
 
 export interface HistoryMeetup {
@@ -210,7 +212,23 @@ export interface HistoryMeetup {
   completedAt?: string;
   meetingPlace?: Location;
   planPlaces: Location[];
+  candidateDateTimes?: string[];
+  roomId?: string | null;
+  roomName?: string | null;
   occurrence?: number;
+}
+
+export interface HomeDashboardData {
+  displayName: string;
+  meetups: HistoryMeetup[];
+  relationships: RelationshipStat[];
+  rooms: Room[];
+  summary: {
+    upcomingMeetupCount: number;
+    completedMeetupCount: number;
+    friendCount: number;
+    groupCount: number;
+  };
 }
 
 export interface PlaceVisit {

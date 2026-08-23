@@ -381,6 +381,8 @@ interface HistoryMeetupPayload {
   completedAt: string | null;
   meetingPlace: Location | null;
   planPlaces: Location[];
+  candidateDateTimes: string[];
+  roomId: string | null;
 }
 
 function timestampIso(value: unknown): string | null {
@@ -389,7 +391,10 @@ function timestampIso(value: unknown): string | null {
 
 async function historyMeetupPayload(snapshot: DocumentSnapshot): Promise<HistoryMeetupPayload> {
   const data = snapshot.data();
-  const plans = await snapshot.ref.collection("planItems").get();
+  const [plans, candidateSlots] = await Promise.all([
+    snapshot.ref.collection("planItems").get(),
+    snapshot.ref.collection("candidateSlots").orderBy("startDateTime").get(),
+  ]);
   const planPlaces = plans.docs
     .filter((item) => item.data()?.status === "completed" && item.data()?.place)
     .map((item) => item.data().place as Location);
@@ -401,6 +406,11 @@ async function historyMeetupPayload(snapshot: DocumentSnapshot): Promise<History
     completedAt: timestampIso(data?.completedAt),
     meetingPlace: data?.meetingPlace ? data.meetingPlace as Location : null,
     planPlaces,
+    candidateDateTimes: candidateSlots.docs.flatMap((slot) => {
+      const value = timestampIso(slot.data()?.startDateTime);
+      return value ? [value] : [];
+    }),
+    roomId: typeof data?.roomId === "string" ? data.roomId : null,
   };
 }
 
@@ -587,10 +597,11 @@ export const upsertVote = onCall(async (request) => {
     db.doc(`meetups/${meetupId}/candidateSlots/${slotId}`).get(),
   ]);
   if (!meetupSnapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
-  if (meetupSnapshot.data()?.status !== "SCHEDULING") {
-    throw new HttpsError("failed-precondition", "Voting is closed after the schedule is confirmed.");
+  const meetupStatus = meetupSnapshot.data()?.status as MeetupStatus | undefined;
+  if (!meetupStatus || meetupStatus === "COMPLETED" || meetupStatus === "CANCELLED") {
+    throw new HttpsError("failed-precondition", "Voting is closed for a finished meetup.");
   }
-  if (responseDeadlineHasPassed(meetupSnapshot.data()?.responseDeadline)) {
+  if (meetupStatus === "SCHEDULING" && responseDeadlineHasPassed(meetupSnapshot.data()?.responseDeadline)) {
     throw new HttpsError("failed-precondition", "The response deadline has passed.");
   }
   if (!slot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
@@ -613,10 +624,11 @@ export const addCandidateSlot = onCall(async (request) => {
   const participant = await requireParticipant(meetupId, uid);
   const snapshot = await meetup.get();
   if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
-  if (snapshot.data()?.status !== "SCHEDULING") {
-    throw new HttpsError("failed-precondition", "Candidate dates can be added only while scheduling.");
+  const meetupStatus = snapshot.data()?.status as MeetupStatus | undefined;
+  if (!meetupStatus || meetupStatus === "COMPLETED" || meetupStatus === "CANCELLED") {
+    throw new HttpsError("failed-precondition", "Candidate dates cannot be added to a finished meetup.");
   }
-  if (responseDeadlineHasPassed(snapshot.data()?.responseDeadline)) {
+  if (meetupStatus === "SCHEDULING" && responseDeadlineHasPassed(snapshot.data()?.responseDeadline)) {
     throw new HttpsError("failed-precondition", "The response deadline has passed.");
   }
   if (participant.data()?.isHost !== true && snapshot.data()?.allowParticipantSlotAdd !== true) {
@@ -696,7 +708,7 @@ async function requirePlanEditor(meetupId: string, uid: string) {
   const [participant, meetup] = await Promise.all([requireParticipant(meetupId, uid), db.doc(`meetups/${meetupId}`).get()]);
   if (!meetup.exists) throw new HttpsError("not-found", "Meetup not found.");
   const status = meetup.data()?.status as MeetupStatus | undefined;
-  if (!status || status === "SCHEDULING" || status === "COMPLETED" || status === "CANCELLED") throw new HttpsError("failed-precondition", "The event plan is not editable.");
+  if (!status || status === "COMPLETED" || status === "CANCELLED") throw new HttpsError("failed-precondition", "The event plan is not editable.");
   if (participant.data()?.isHost !== true && meetup.data()?.allowPlanEditing !== true) throw new HttpsError("permission-denied", "Only the host can edit this plan.");
   return { participant, meetup };
 }
@@ -756,7 +768,7 @@ export const setPlanItemStatus = onCall(async (request) => {
   const status = requirePlanItemStatus(request.data?.status);
   await requireParticipant(meetupId, uid);
   const meetup = await db.doc(`meetups/${meetupId}`).get();
-  if (!meetup.exists || ["SCHEDULING", "COMPLETED", "CANCELLED"].includes(meetup.data()?.status)) throw new HttpsError("failed-precondition", "Plan item status cannot be changed.");
+  if (!meetup.exists || ["COMPLETED", "CANCELLED"].includes(meetup.data()?.status)) throw new HttpsError("failed-precondition", "Plan item status cannot be changed.");
   const item = meetup.ref.collection("planItems").doc(itemId);
   if (!(await item.get()).exists) throw new HttpsError("not-found", "Plan item not found.");
   await item.update({ status, ...(status === "completed" ? { completedAt: FieldValue.serverTimestamp(), completedByUid: uid } : { completedAt: FieldValue.delete(), completedByUid: FieldValue.delete() }), updatedAt: FieldValue.serverTimestamp() });
@@ -831,9 +843,11 @@ export const confirmSchedule = onCall(async (request) => {
     if (!slotSnapshot.exists) throw new HttpsError("not-found", "Candidate slot not found.");
     const value = slotSnapshot.data()?.startDateTime as Timestamp | undefined;
     if (!(value instanceof Timestamp)) throw new HttpsError("failed-precondition", "Candidate slot is invalid.");
-    const nextStatus: MeetupStatus = meetupSnapshot.data()?.collectOrigins === false
-      ? "LOCATION_SELECTING"
-      : "SCHEDULE_CONFIRMED";
+    const nextStatus: MeetupStatus = meetupSnapshot.data()?.meetingPlace
+      ? "READY"
+      : meetupSnapshot.data()?.collectOrigins === false
+        ? "LOCATION_SELECTING"
+        : "SCHEDULE_CONFIRMED";
     transaction.update(meetup, {
       status: nextStatus,
       confirmedDateTime: value,
@@ -947,13 +961,12 @@ export const saveOrigin = onCall(async (request) => {
   if (meetup.data()?.collectOrigins === false) {
     throw new HttpsError("failed-precondition", "The host has disabled origin collection for this meetup.");
   }
-  if (!["SCHEDULE_CONFIRMED", "LOCATION_COLLECTING", "LOCATION_SELECTING"].includes(meetup.data()?.status)) {
-    throw new HttpsError("failed-precondition", "Origins can be saved only after the schedule is confirmed.");
-  }
+  const meetupStatus = meetup.data()?.status as MeetupStatus | undefined;
+  if (!meetupStatus || meetupStatus === "COMPLETED" || meetupStatus === "CANCELLED") throw new HttpsError("failed-precondition", "Origins cannot be changed for a finished meetup.");
   const batch = db.batch();
   batch.set(db.doc(`meetups/${meetupId}/privateOrigins/${uid}`), { uid, origin, updatedAt: FieldValue.serverTimestamp() });
   batch.set(db.doc(`meetups/${meetupId}/participants/${uid}`), { hasOrigin: true, originArea: origin.name, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-  if (meetup.data()?.status === "SCHEDULE_CONFIRMED") batch.update(meetup.ref, { status: "LOCATION_COLLECTING" satisfies MeetupStatus, updatedAt: FieldValue.serverTimestamp() });
+  if (meetupStatus === "SCHEDULE_CONFIRMED") batch.update(meetup.ref, { status: "LOCATION_COLLECTING" satisfies MeetupStatus, updatedAt: FieldValue.serverTimestamp() });
   await batch.commit();
   return { hasOrigin: true, originArea: origin.name };
 });
@@ -972,8 +985,13 @@ export const beginLocationSelection = onCall(async (request) => {
   await requireHost(meetupId, uid);
   const origins = await participantOrigins(meetupId);
   if (origins.length < 2) throw new HttpsError("failed-precondition", "At least two origins are needed to choose a meeting place.");
-  await db.doc(`meetups/${meetupId}`).update({ status: "LOCATION_SELECTING" satisfies MeetupStatus, updatedAt: FieldValue.serverTimestamp() });
-  return { status: "LOCATION_SELECTING" };
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const snapshot = await meetup.get();
+  const currentStatus = snapshot.data()?.status as MeetupStatus | undefined;
+  if (!currentStatus || currentStatus === "COMPLETED" || currentStatus === "CANCELLED") throw new HttpsError("failed-precondition", "Meeting place selection is closed.");
+  const nextStatus: MeetupStatus = currentStatus === "SCHEDULING" ? "SCHEDULING" : "LOCATION_SELECTING";
+  await meetup.update({ status: nextStatus, updatedAt: FieldValue.serverTimestamp() });
+  return { status: nextStatus };
 });
 
 export const getMeetingPointRecommendations = onCall(async (request) => {
@@ -1019,12 +1037,13 @@ export const confirmMeetingPlace = onCall(async (request) => {
   const meetup = db.doc(`meetups/${meetupId}`);
   const snapshot = await meetup.get();
   if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
-  if (!["LOCATION_COLLECTING", "LOCATION_SELECTING", "LOCATION_CONFIRMED", "READY"].includes(snapshot.data()?.status)) throw new HttpsError("failed-precondition", "Confirm the schedule and collect origins first.");
+  const currentStatus = snapshot.data()?.status as MeetupStatus | undefined;
+  if (!currentStatus || currentStatus === "COMPLETED" || currentStatus === "CANCELLED") throw new HttpsError("failed-precondition", "Meeting place selection is closed.");
   // Departure/arrival-time calculation is intentionally disabled for now, so
   // confirming a place finishes the planning flow without a route step.
   await meetup.update({
     meetingPlace,
-    status: "READY" satisfies MeetupStatus,
+    status: (currentStatus === "SCHEDULING" ? "SCHEDULING" : "READY") satisfies MeetupStatus,
     targetArrivalTime: FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp(),
   });
@@ -1308,6 +1327,76 @@ export const getMyRooms = onCall(async (request) => {
     return room?.exists ? { id: room.id, name: room.data()?.name, inviteCode: room.data()?.inviteCode, role: membership.data().role } : null;
   }));
   return { rooms: rooms.filter((room): room is NonNullable<typeof room> => room !== null) };
+});
+
+/** One read model for the signed-in home calendar, timeline, friends, and groups. */
+export const getMyDashboard = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  await requireRegisteredUser(uid, request.auth?.token.firebase?.sign_in_provider);
+  try {
+    await recordRelationshipsForRegisteredUser(uid);
+  } catch (caught) {
+    console.error("Could not refresh dashboard relationships", { uid, message: caught instanceof Error ? caught.message : "Unknown error" });
+  }
+
+  const [profile, participations, relationships, memberships] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    db.collectionGroup("participants").where("uid", "==", uid).limit(100).get(),
+    db.collection(`users/${uid}/relationships`).orderBy("lastMeetupAt", "desc").limit(50).get(),
+    db.collectionGroup("members").where("uid", "==", uid).limit(50).get(),
+  ]);
+  const meetupSnapshots = await Promise.all(participations.docs.map((participation) => participation.ref.parent.parent?.get()));
+  const uniqueMeetups = new Map<string, DocumentSnapshot>();
+  meetupSnapshots.forEach((meetup) => { if (meetup?.exists) uniqueMeetups.set(meetup.id, meetup); });
+  const histories = await Promise.all([...uniqueMeetups.values()].map(historyMeetupPayload));
+
+  const roomSnapshots = await Promise.all(memberships.docs.map((membership) => membership.ref.parent.parent?.get()));
+  const roomById = new Map(roomSnapshots.filter((room): room is DocumentSnapshot => Boolean(room?.exists)).map((room) => [room.id, room]));
+  const completedByRoom = new Map<string, number>();
+  histories.filter((meetup) => meetup.status === "COMPLETED" && meetup.roomId).forEach((meetup) => completedByRoom.set(meetup.roomId!, (completedByRoom.get(meetup.roomId!) ?? 0) + 1));
+  const nextByRoom = new Map<string, string>();
+  histories.filter((meetup) => !["COMPLETED", "CANCELLED"].includes(meetup.status) && meetup.roomId).forEach((meetup) => {
+    const date = meetup.confirmedDateTime ?? meetup.candidateDateTimes[0];
+    if (date && (!nextByRoom.get(meetup.roomId!) || date < nextByRoom.get(meetup.roomId!)!)) nextByRoom.set(meetup.roomId!, date);
+  });
+  const rooms = memberships.docs.flatMap((membership) => {
+    const room = membership.ref.parent.parent ? roomById.get(membership.ref.parent.parent.id) : undefined;
+    return room ? [{
+      id: room.id,
+      name: room.data()?.name ?? "aimasho group",
+      inviteCode: room.data()?.inviteCode ?? "",
+      role: membership.data().role,
+      completedMeetupCount: completedByRoom.get(room.id) ?? 0,
+      nextMeetupDate: nextByRoom.get(room.id) ?? null,
+    }] : [];
+  });
+  const roomNames = new Map(rooms.map((room) => [room.id, room.name]));
+  const meetups = histories.map((meetup) => ({ ...meetup, roomName: meetup.roomId ? roomNames.get(meetup.roomId) ?? null : null }));
+  const dateOf = (meetup: HistoryMeetupPayload) => meetup.confirmedDateTime ?? meetup.candidateDateTimes[0] ?? meetup.completedAt ?? "";
+  meetups.sort((first, second) => {
+    const firstPast = ["COMPLETED", "CANCELLED"].includes(first.status);
+    const secondPast = ["COMPLETED", "CANCELLED"].includes(second.status);
+    if (firstPast !== secondPast) return firstPast ? 1 : -1;
+    return firstPast ? dateOf(second).localeCompare(dateOf(first)) : dateOf(first).localeCompare(dateOf(second));
+  });
+
+  return {
+    displayName: profile.data()?.displayName ?? request.auth?.token.name ?? "aimasho user",
+    meetups,
+    relationships: relationships.docs.map((relationship) => ({
+      otherUid: relationship.id,
+      displayName: relationship.data().displayName ?? "aimasho user",
+      sharedMeetupCount: relationship.data().sharedMeetupCount ?? 0,
+      lastMeetupId: relationship.data().lastMeetupId ?? null,
+    })),
+    rooms,
+    summary: {
+      upcomingMeetupCount: histories.filter((meetup) => !["COMPLETED", "CANCELLED"].includes(meetup.status)).length,
+      completedMeetupCount: histories.filter((meetup) => meetup.status === "COMPLETED").length,
+      friendCount: relationships.size,
+      groupCount: rooms.length,
+    },
+  };
 });
 
 export const getRoomDetail = onCall(async (request) => {
