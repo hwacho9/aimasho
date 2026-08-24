@@ -328,11 +328,6 @@ function relationshipPairId(firstUid: string, secondUid: string): string {
   return Buffer.from([firstUid, secondUid].sort().join("\u0000")).toString("base64url");
 }
 
-async function isRegisteredUser(uid: string): Promise<boolean> {
-  const profile = await db.doc(`users/${uid}`).get();
-  return profile.data()?.accountType === "REGISTERED";
-}
-
 async function registeredParticipants(meetupId: string): Promise<RegisteredParticipant[]> {
   const participants = await db.collection(`meetups/${meetupId}/participants`).get();
   if (participants.empty) return [];
@@ -1220,8 +1215,19 @@ export const saveProfile = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const displayName = requireString(request.data?.displayName, "displayName", 60);
   const accountType = request.auth?.token.firebase?.sign_in_provider === "anonymous" ? "ANONYMOUS" : "REGISTERED";
-  await db.doc(`users/${uid}`).set({ uid, displayName, accountType, updatedAt: FieldValue.serverTimestamp(), createdAt: FieldValue.serverTimestamp() }, { merge: true });
-  if (accountType === "REGISTERED") {
+  const profile = db.doc(`users/${uid}`);
+  const existing = await profile.get();
+  const becameRegistered = accountType === "REGISTERED" && existing.data()?.accountType !== "REGISTERED";
+  await profile.set({
+    uid,
+    displayName,
+    accountType,
+    updatedAt: FieldValue.serverTimestamp(),
+    ...(!existing.exists ? { createdAt: FieldValue.serverTimestamp() } : {}),
+  }, { merge: true });
+  // Historical relationship backfill is needed only on the one-time account
+  // upgrade, not on every login and profile visit.
+  if (becameRegistered) {
     try {
       await recordRelationshipsForRegisteredUser(uid);
     } catch (caught) {
@@ -1234,11 +1240,17 @@ export const saveProfile = onCall(async (request) => {
 export const getMeetupRelationships = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
-  await requireParticipant(meetupId, uid);
-  if (!(await isRegisteredUser(uid))) return { relationships: [] };
-  await recordRelationshipsForMeetup(meetupId, uid);
-  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
-  const relationships = await db.getAll(...participants.docs.filter((participant) => participant.id !== uid).map((participant) => db.doc(`users/${uid}/relationships/${participant.id}`)));
+  const [participant, profile, participants] = await Promise.all([
+    db.doc(`meetups/${meetupId}/participants/${uid}`).get(),
+    db.doc(`users/${uid}`).get(),
+    db.collection(`meetups/${meetupId}/participants`).get(),
+  ]);
+  if (!participant.exists) throw new HttpsError("permission-denied", "You are not a meetup participant.");
+  if (profile.data()?.accountType !== "REGISTERED") return { relationships: [] };
+  const relationshipRefs = participants.docs
+    .filter((participant) => participant.id !== uid)
+    .map((participant) => db.doc(`users/${uid}/relationships/${participant.id}`));
+  const relationships = relationshipRefs.length > 0 ? await db.getAll(...relationshipRefs) : [];
   return {
     relationships: relationships.flatMap((relationship) => relationship.exists ? [{
       otherUid: relationship.id,
@@ -1251,9 +1263,11 @@ export const getMeetupRelationships = onCall(async (request) => {
 
 export const getMyRelationships = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
-  if (!(await isRegisteredUser(uid))) return { relationships: [] };
-  await recordRelationshipsForRegisteredUser(uid);
-  const relationships = await db.collection(`users/${uid}/relationships`).orderBy("lastMeetupAt", "desc").limit(100).get();
+  const [profile, relationships] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    db.collection(`users/${uid}/relationships`).orderBy("lastMeetupAt", "desc").limit(100).get(),
+  ]);
+  if (profile.data()?.accountType !== "REGISTERED") return { relationships: [] };
   return {
     relationships: relationships.docs.map((relationship) => ({
       otherUid: relationship.id,
@@ -1268,10 +1282,13 @@ export const getMyRelationships = onCall(async (request) => {
 export const getFriendHistory = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const otherUid = requireString(request.data?.otherUid, "otherUid", 128);
-  if (!(await isRegisteredUser(uid))) throw new HttpsError("failed-precondition", "Create an account to view friend history.");
-  const relationship = await db.doc(`users/${uid}/relationships/${otherUid}`).get();
+  const [profile, relationship, participations] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    db.doc(`users/${uid}/relationships/${otherUid}`).get(),
+    db.collectionGroup("participants").where("uid", "==", uid).limit(150).get(),
+  ]);
+  if (profile.data()?.accountType !== "REGISTERED") throw new HttpsError("failed-precondition", "Create an account to view friend history.");
   if (!relationship.exists) throw new HttpsError("not-found", "Friend relationship not found.");
-  const participations = await db.collectionGroup("participants").where("uid", "==", uid).limit(150).get();
   const candidates = await Promise.all(participations.docs.map(async (participant) => participant.ref.parent.parent?.get()));
   const shared = await Promise.all(candidates.filter((meetup): meetup is DocumentSnapshot => Boolean(meetup?.exists)).map(async (meetup) => ({ meetup, other: await meetup.ref.collection("participants").doc(otherUid).get() })));
   const histories = await Promise.all(shared.filter(({ other }) => other.exists).map(({ meetup }) => historyMeetupPayload(meetup)));
@@ -1354,8 +1371,12 @@ export const joinRoom = onCall(async (request) => {
 
 export const getMyRooms = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
-  await requireRegisteredUser(uid, request.auth?.token.firebase?.sign_in_provider);
-  const memberships = await db.collectionGroup("members").where("uid", "==", uid).get();
+  if (request.auth?.token.firebase?.sign_in_provider === "anonymous") throw new HttpsError("failed-precondition", "Create an account to use Rooms.");
+  const [profile, memberships] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    db.collectionGroup("members").where("uid", "==", uid).get(),
+  ]);
+  if (profile.data()?.accountType !== "REGISTERED") throw new HttpsError("failed-precondition", "Create an account to use Rooms.");
   const rooms = await Promise.all(memberships.docs.map(async (membership) => {
     const room = await membership.ref.parent.parent?.get();
     return room?.exists ? { id: room.id, name: room.data()?.name, inviteCode: room.data()?.inviteCode, role: membership.data().role } : null;
@@ -1379,23 +1400,40 @@ async function dashboardCollectionGroupDocs(collectionGroup: "participants" | "m
 /** One read model for the signed-in home calendar, timeline, friends, and groups. */
 export const getMyDashboard = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
-  await requireRegisteredUser(uid, request.auth?.token.firebase?.sign_in_provider);
-  try {
-    await recordRelationshipsForRegisteredUser(uid);
-  } catch (caught) {
-    console.error("Could not refresh dashboard relationships", { uid, message: caught instanceof Error ? caught.message : "Unknown error" });
-  }
-
+  if (request.auth?.token.firebase?.sign_in_provider === "anonymous") throw new HttpsError("failed-precondition", "Create an account to use the dashboard.");
   const [profile, participationDocs, relationships, membershipDocs] = await Promise.all([
     db.doc(`users/${uid}`).get(),
     dashboardCollectionGroupDocs("participants", uid, 100),
     db.collection(`users/${uid}/relationships`).orderBy("lastMeetupAt", "desc").limit(50).get(),
     dashboardCollectionGroupDocs("members", uid, 50),
   ]);
+  if (profile.data()?.accountType !== "REGISTERED") throw new HttpsError("failed-precondition", "Create an account to use the dashboard.");
   const meetupSnapshots = await Promise.all(participationDocs.map((participation) => participation.ref.parent.parent?.get()));
   const uniqueMeetups = new Map<string, DocumentSnapshot>();
   meetupSnapshots.forEach((meetup) => { if (meetup?.exists) uniqueMeetups.set(meetup.id, meetup); });
-  const histories = await Promise.all([...uniqueMeetups.values()].map(historyMeetupPayload));
+  const histories = await Promise.all([...uniqueMeetups.values()].map(async (snapshot): Promise<HistoryMeetupPayload> => {
+    const data = snapshot.data();
+    const confirmedDateTime = timestampIso(data?.confirmedDateTime);
+    const completedAt = timestampIso(data?.completedAt);
+    // The dashboard does not render plan-place history. Only an unconfirmed
+    // meetup needs its first candidate date, avoiding two subcollection reads
+    // for every item on the signed-in home page.
+    const firstCandidate = !confirmedDateTime && !completedAt
+      ? await snapshot.ref.collection("candidateSlots").orderBy("startDateTime").limit(1).get()
+      : null;
+    const candidateDate = firstCandidate?.docs[0] ? timestampIso(firstCandidate.docs[0].data()?.startDateTime) : null;
+    return {
+      id: snapshot.id,
+      title: data?.title ?? "aimasho meetup",
+      status: data?.status as MeetupStatus,
+      confirmedDateTime,
+      completedAt,
+      meetingPlace: data?.meetingPlace ? data.meetingPlace as Location : null,
+      planPlaces: [],
+      candidateDateTimes: candidateDate ? [candidateDate] : [],
+      roomId: typeof data?.roomId === "string" ? data.roomId : null,
+    };
+  }));
 
   const roomSnapshots = await Promise.all(membershipDocs.map((membership) => membership.ref.parent.parent?.get()));
   const roomById = new Map(roomSnapshots.filter((room): room is DocumentSnapshot => Boolean(room?.exists)).map((room) => [room.id, room]));
@@ -1449,9 +1487,12 @@ export const getMyDashboard = onCall(async (request) => {
 export const getRoomDetail = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const roomId = requireString(request.data?.roomId, "roomId", 128);
-  const room = await db.doc(`rooms/${roomId}`).get();
+  const roomRef = db.doc(`rooms/${roomId}`);
+  const [room, membership] = await Promise.all([
+    roomRef.get(),
+    roomRef.collection("members").doc(uid).get(),
+  ]);
   if (!room.exists) throw new HttpsError("not-found", "Room not found.");
-  const membership = await room.ref.collection("members").doc(uid).get();
   if (!membership.exists) throw new HttpsError("permission-denied", "You are not a Room member.");
   const [members, meetups] = await Promise.all([room.ref.collection("members").get(), db.collection("meetups").where("roomId", "==", roomId).limit(150).get()]);
   const history = await Promise.all(meetups.docs.map((meetup) => historyMeetupPayload(meetup)));

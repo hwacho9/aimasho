@@ -243,8 +243,15 @@ export function subscribeToMeetup(meetupId: string, onData: (data: MeetupDetail)
   let contentOptions: ContentOption[] = [];
   let contentVotes: ContentVote[] = [];
   let planItems: PlanItem[] = [];
+  let publishTimer: ReturnType<typeof setTimeout> | undefined;
   const publish = () => {
-    if (meetup) onData({ meetup, participants, candidateSlots, votes, routes, expenses, contentOptions, contentVotes, planItems });
+    if (!meetup) return;
+    if (publishTimer) clearTimeout(publishTimer);
+    // The nine listeners usually deliver their initial snapshots together.
+    // Coalescing them avoids rendering the entire meetup nine times.
+    publishTimer = setTimeout(() => {
+      if (meetup) onData({ meetup, participants, candidateSlots, votes, routes, expenses, contentOptions, contentVotes, planItems });
+    }, 20);
   };
   const base = doc(db, "meetups", meetupId);
   const stops = [
@@ -308,5 +315,8 @@ export function subscribeToMeetup(meetupId: string, onData: (data: MeetupDetail)
       publish();
     }, onError),
   ];
-  return () => stops.forEach((stop) => stop());
+  return () => {
+    if (publishTimer) clearTimeout(publishTimer);
+    stops.forEach((stop) => stop());
+  };
 }

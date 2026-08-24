@@ -24,6 +24,9 @@ function appHostingFirebaseConfig(): FirebaseWebAppConfig {
 const appHostingConfig = appHostingFirebaseConfig();
 
 const nextConfig: NextConfig = {
+  // Keep stale ISR shells for at most one hour. The default one-year window
+  // can otherwise leave an old JavaScript entrypoint visible after a rollout.
+  expireTime: 60 * 60,
   // App Hosting supplies FIREBASE_WEBAPP_CONFIG during builds. These mappings
   // expose its public Firebase settings to the browser, while .env.local keeps
   // taking precedence during local development.

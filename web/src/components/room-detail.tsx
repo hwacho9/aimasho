@@ -25,7 +25,13 @@ export function RoomDetail({ roomId }: { roomId: string }) {
   const [filter, setFilter] = useState<HistoryFilter>("ALL"); const [view, setView] = useState<"LIST" | "MAP">("LIST"); const [selectedPlace, setSelectedPlace] = useState<PlaceVisit>();
   const [shareStatus, setShareStatus] = useState<ShareStatus>();
   const [deleting, setDeleting] = useState(false);
-  useEffect(() => { void getRoomDetail(roomId).then(setData).catch((caught) => setError(caught instanceof Error ? caught.message : korean ? "그룹을 불러올 수 없어요." : "グループを読み込めませんでした。")); }, [roomId, korean]);
+  useEffect(() => {
+    let active = true;
+    void getRoomDetail(roomId)
+      .then((next) => { if (active) setData(next); })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load the group."); });
+    return () => { active = false; };
+  }, [roomId]);
   const filtered = useMemo(() => data?.meetups.filter((meetup) => filter === "ALL" || filter === "PAST" && meetup.status === "COMPLETED" || filter === "CANCELLED" && meetup.status === "CANCELLED" || filter === "UPCOMING" && !["COMPLETED", "CANCELLED"].includes(meetup.status)) ?? [], [data?.meetups, filter]);
   const mapBounds = useMemo(() => {
     const places = data?.mapPlaces ?? [];

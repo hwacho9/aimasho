@@ -5,6 +5,9 @@ type PageProps = { params: Promise<{ meetupId: string }> };
 
 const defaultDescription = "予定を合わせて、場所を合わせて、会いましょう。";
 
+export const revalidate = 60;
+export function generateStaticParams() { return []; }
+
 async function inviteMetadata(meetupId: string): Promise<{ title: string; description: string } | undefined> {
   const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "aimasho";
   const endpoint = `https://asia-northeast1-${projectId}.cloudfunctions.net/getPublicMeetupMetadata?meetupId=${encodeURIComponent(meetupId)}`;

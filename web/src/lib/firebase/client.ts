@@ -1,7 +1,7 @@
 "use client";
 
 import { FirebaseApp, getApp, getApps, initializeApp } from "firebase/app";
-import { getAnalytics, isSupported, logEvent, type Analytics } from "firebase/analytics";
+import type { Analytics } from "firebase/analytics";
 import { Auth, browserLocalPersistence, browserSessionPersistence, connectAuthEmulator, getAuth, GoogleAuthProvider, linkWithPopup, reauthenticateWithPopup, setPersistence, signInAnonymously, signInWithPopup, User } from "firebase/auth";
 import { connectFirestoreEmulator, Firestore, getFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, Functions, getFunctions } from "firebase/functions";
@@ -14,8 +14,14 @@ interface FirebaseServices {
 
 let emulatorConnected = false;
 let analyticsPromise: Promise<Analytics | null> | undefined;
+let analyticsModulePromise: Promise<typeof import("firebase/analytics")> | undefined;
 let anonymousSignInPromise: Promise<User> | undefined;
 let authInitializationPromise: Promise<Auth> | undefined;
+
+function loadAnalyticsModule(): Promise<typeof import("firebase/analytics")> {
+  analyticsModulePromise ??= import("firebase/analytics");
+  return analyticsModulePromise;
+}
 
 // Next.js replaces public environment variables in browser bundles only when
 // they are referenced statically. Do not use process.env[name] here: that
@@ -99,17 +105,22 @@ export function initializeAnalytics(): Promise<Analytics | null> {
   if (typeof window === "undefined" || !hasFirebaseConfiguration || !publicEnvironment.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID || publicEnvironment.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === "true") {
     return Promise.resolve(null);
   }
-  analyticsPromise ??= isSupported()
-    .then((supported) => supported ? getAnalytics(getAppInstance()) : null)
+  analyticsPromise ??= loadAnalyticsModule()
+    .then(async ({ getAnalytics, isSupported }) => await isSupported() ? getAnalytics(getAppInstance()) : null)
     .catch(() => null);
   return analyticsPromise;
 }
 
 /** Logs product behavior only. Do not pass names, titles, locations, IDs, or amounts. */
 export function trackAnalyticsEvent(name: string): void {
-  void initializeAnalytics().then((analytics) => {
-    if (analytics) logEvent(analytics, name);
-  });
+  void initializeAnalytics()
+    .then(async (analytics) => {
+      if (analytics) {
+        const { logEvent } = await loadAnalyticsModule();
+        logEvent(analytics, name);
+      }
+    })
+    .catch(() => undefined);
 }
 
 export async function ensureAnonymousUser(): Promise<User> {

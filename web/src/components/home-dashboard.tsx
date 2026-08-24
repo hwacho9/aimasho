@@ -30,13 +30,17 @@ export function HomeDashboard() {
   const korean = language === "ko";
   const now = new Date();
   const [data, setData] = useState<HomeDashboardData>();
-  const [error, setError] = useState<string>();
+  const [loadFailed, setLoadFailed] = useState(false);
   const [view, setView] = useState<"CALENDAR" | "TIMELINE">("CALENDAR");
   const [month, setMonth] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
 
   useEffect(() => {
-    void getMyDashboard().then(setData).catch((caught) => setError(caught instanceof Error ? caught.message : korean ? "내 일정을 불러오지 못했어요." : "予定を読み込めませんでした。"));
-  }, [korean]);
+    let active = true;
+    void getMyDashboard()
+      .then((next) => { if (active) setData(next); })
+      .catch(() => { if (active) setLoadFailed(true); });
+    return () => { active = false; };
+  }, []);
 
   const monthCells = useMemo(() => {
     const firstWeekday = new Date(Date.UTC(month.year, month.month - 1, 1)).getUTCDay();
@@ -58,7 +62,7 @@ export function HomeDashboard() {
   });
   const displayDate = (value?: string) => value ? new Intl.DateTimeFormat(locale, { timeZone: "Asia/Tokyo", month: "short", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)) : korean ? "날짜 조율 중" : "日程調整中";
 
-  if (error) return <section className="home-dashboard"><p className="error-message">{error}</p></section>;
+  if (loadFailed) return <section className="home-dashboard"><p className="error-message">{korean ? "내 일정을 불러오지 못했어요." : "予定を読み込めませんでした。"}</p></section>;
   if (!data) return <section className="home-dashboard dashboard-loading"><div className="loader" /><p>{korean ? "내 일정 보드를 준비하고 있어요..." : "予定ボードを準備しています…"}</p></section>;
 
   return <section className="home-dashboard" aria-labelledby="home-dashboard-title">
