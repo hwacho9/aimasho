@@ -427,7 +427,11 @@ export const createMeetup = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const data = request.data as Partial<CreateMeetupInput>;
   const title = requireString(data.title, "title", 80);
-  const description = data.description === undefined ? undefined : requireString(data.description, "description", 500);
+  const description = data.description === undefined
+    || data.description === null
+    || (typeof data.description === "string" && data.description.trim() === "")
+    ? undefined
+    : requireString(data.description, "description", 500);
   if (!Number.isInteger(data.durationMinutes) || (data.durationMinutes ?? 0) < 30 || (data.durationMinutes ?? 0) > 1440) {
     throw new HttpsError("invalid-argument", "durationMinutes must be between 30 and 1440.");
   }

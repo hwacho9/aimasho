@@ -22,9 +22,16 @@ export async function identify(name: string) {
 }
 
 export async function createMeetup(input: { hostName: string; title: string; description?: string; durationMinutes: number; candidateSlots: string[]; roomId?: string; collectOrigins?: boolean; allowParticipantSlotAdd?: boolean; responseDeadline?: string; scheduleCondition?: ScheduleCondition; contentVoteConfig?: ContentVoteConfig; allowPlanEditing?: boolean }) {
-  await identify(input.hostName);
-  const { hostName, ...values } = input;
-  const payload = { ...values, displayName: hostName };
+  const { hostName, description, ...values } = input;
+  const normalizedHostName = hostName.trim();
+  await identify(normalizedHostName);
+  const trimmedDescription = description?.trim();
+  const payload = {
+    ...values,
+    title: values.title.trim(),
+    displayName: normalizedHostName,
+    ...(trimmedDescription ? { description: trimmedDescription } : {}),
+  };
   const response = await callable<typeof payload, { meetupId: string }>("createMeetup")(payload);
   trackAnalyticsEvent("meetup_created");
   return response.data.meetupId;

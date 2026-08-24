@@ -3,6 +3,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createMeetup } from "@/services/meetup-repository";
+import { useAuth } from "./auth-provider";
 import { useLanguage } from "./language-provider";
 
 const weekdays = [{ value: 1, ko: "월", ja: "月" }, { value: 2, ko: "화", ja: "火" }, { value: 3, ko: "수", ja: "水" }, { value: 4, ko: "목", ja: "木" }, { value: 5, ko: "금", ja: "金" }, { value: 6, ko: "토", ja: "土" }, { value: 0, ko: "일", ja: "日" }];
@@ -20,10 +21,12 @@ function initialSlots() {
 
 export function MeetupCreateForm({ roomId }: { roomId?: string }) {
   const router = useRouter();
+  const { user } = useAuth();
   const { language } = useLanguage();
   const korean = language === "ko";
   const [title, setTitle] = useState("");
-  const [hostName, setHostName] = useState("");
+  const [hostNameInput, setHostNameInput] = useState<string>();
+  const hostName = hostNameInput ?? (user && !user.isAnonymous ? user.displayName ?? "" : "");
   const [description, setDescription] = useState("");
   const [durationMinutes, setDurationMinutes] = useState(120);
   const [slots, setSlots] = useState(initialSlots);
@@ -42,6 +45,7 @@ export function MeetupCreateForm({ roomId }: { roomId?: string }) {
   const [allowPlanEditing, setAllowPlanEditing] = useState(false);
   const [error, setError] = useState<string>();
   const [isSaving, setIsSaving] = useState(false);
+
   const canSubmit = useMemo(() => hostName.trim() && title.trim() && slots.some(Boolean), [hostName, title, slots]);
   const updateSlot = (index: number, value: string) => setSlots((current) => current.map((slot, slotIndex) => slotIndex === index ? value : slot));
   const removeSlot = (index: number) => setSlots((current) => current.filter((_, slotIndex) => slotIndex !== index));
@@ -79,7 +83,8 @@ export function MeetupCreateForm({ roomId }: { roomId?: string }) {
         ...(scheduleMode === "RANGE" && rangeEnd ? { rangeEnd: new Date(`${rangeEnd}T${rangeTime}`).toISOString() } : {}),
         weekdayNumbers: selectedWeekdays,
       };
-      const meetupId = await createMeetup({ hostName, title, description: description || undefined, durationMinutes, candidateSlots, roomId, collectOrigins, allowParticipantSlotAdd, responseDeadline: responseDeadline ? new Date(responseDeadline).toISOString() : undefined, scheduleCondition, contentVoteConfig: { food: foodVote, activity: activityVote, allowMultiple: allowMultipleContentVotes, allowParticipantOptions: true }, allowPlanEditing });
+      const trimmedDescription = description.trim();
+      const meetupId = await createMeetup({ hostName, title, ...(trimmedDescription ? { description: trimmedDescription } : {}), durationMinutes, candidateSlots, roomId, collectOrigins, allowParticipantSlotAdd, responseDeadline: responseDeadline ? new Date(responseDeadline).toISOString() : undefined, scheduleCondition, contentVoteConfig: { food: foodVote, activity: activityVote, allowMultiple: allowMultipleContentVotes, allowParticipantOptions: true }, allowPlanEditing });
       router.push(`/m/${meetupId}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : korean ? "약속을 만들지 못했어요. 다시 시도해주세요." : "予定を作成できませんでした。もう一度お試しください。");
@@ -89,9 +94,9 @@ export function MeetupCreateForm({ roomId }: { roomId?: string }) {
 
   return <form className="stack-lg" onSubmit={submit}>
     {roomId && <p className="room-context">{korean ? "이 그룹의 멤버가 자동으로 약속에 참여해요." : "このグループのメンバーが自動的に予定へ参加します。"}</p>}
-    <label className="field small-field"><span>{korean ? "내 이름" : "あなたの名前"}</span><input value={hostName} onChange={(event) => setHostName(event.target.value)} maxLength={60} placeholder={korean ? "예: 민수" : "例：たなか"} required /></label>
+    <label className="field small-field"><span>{korean ? "내 이름" : "あなたの名前"}</span><input value={hostName} onChange={(event) => setHostNameInput(event.target.value)} maxLength={60} placeholder={korean ? "예: 민수" : "例：たなか"} required /></label>
     <label className="field"><span>{korean ? "약속 이름" : "予定の名前"}</span><input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder={korean ? "예: 친구들과 저녁" : "例：大学の友だちと夜ごはん"} required /></label>
-    <label className="field"><span>{korean ? <>한마디 <em>선택</em></> : <>ひとこと <em>任意</em></>}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} placeholder={korean ? "무엇을 할까요?" : "何をしますか？"} rows={3} /></label>
+    <label className="field"><span>{korean ? <>설명 <em>선택</em></> : <>説明 <em>任意</em></>}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} placeholder={korean ? "비워두어도 괜찮아요" : "空欄でも作成できます"} rows={3} /></label>
     <label className="field small-field"><span>{korean ? "예상 약속 시간" : "予定時間"}</span><select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}><option value={60}>{korean ? "1시간" : "1時間"}</option><option value={90}>{korean ? "1시간 30분" : "1時間30分"}</option><option value={120}>{korean ? "2시간" : "2時間"}</option><option value={180}>{korean ? "3시간" : "3時間"}</option><option value={240}>{korean ? "4시간" : "4時間"}</option></select></label>
     <section className="slot-fields" aria-labelledby="slot-heading"><div className="section-heading"><div><p className="eyebrow">{korean ? "언제" : "いつ"}</p><h2 id="slot-heading">{korean ? "후보 날짜와 시간" : "候補の日時"}</h2></div><span>{slots.length}/12</span></div><label className="field small-field"><span>{korean ? "후보 만들기 방식" : "候補の作り方"}</span><select value={scheduleMode} onChange={(event) => setScheduleMode(event.target.value as typeof scheduleMode)}><option value="MANUAL">{korean ? "직접 날짜·시간 입력" : "日時を直接入力"}</option><option value="RANGE">{korean ? "기간과 요일로 생성" : "期間・曜日から作成"}</option><option value="MONTH">{korean ? "월 단위로 생성" : "月単位で作成"}</option><option value="NEXT_MONTH">{korean ? "다음 달로 생성" : "来月から作成"}</option></select></label>{scheduleMode !== "MANUAL" && <div className="condition-builder">{scheduleMode === "RANGE" ? <><label><span>{korean ? "시작일" : "開始日"}</span><input type="date" value={rangeStart} onChange={(event) => setRangeStart(event.target.value)} required /></label><label><span>{korean ? "마지막 날" : "終了日"}</span><input type="date" value={rangeEnd} onChange={(event) => setRangeEnd(event.target.value)} required /></label></> : scheduleMode === "MONTH" ? <label><span>{korean ? "대상 월" : "対象月"}</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label> : <p className="inline-note">{korean ? "다음 달의 가능한 요일로 후보를 만들어요." : "来月の選択した曜日から候補を作ります。"}</p>}<label><span>{korean ? "시간" : "時刻"}</span><input type="time" value={rangeTime} onChange={(event) => setRangeTime(event.target.value)} /></label><div className="weekday-toggle">{weekdays.map((weekday) => <label key={weekday.value}><input type="checkbox" checked={selectedWeekdays.includes(weekday.value)} onChange={() => toggleWeekday(weekday.value)} />{korean ? weekday.ko : weekday.ja}</label>)}</div><button type="button" className="secondary-button" onClick={generateSlots}>{korean ? "조건으로 후보 만들기" : "条件から候補を作る"}</button></div>}{slots.map((slot, index) => <div className="date-row" key={`${index}-${slot}`}><span className="slot-index">{index + 1}</span><input type="datetime-local" value={slot} onChange={(event) => updateSlot(index, event.target.value)} required />{slots.length > 1 && <button className="icon-button" onClick={() => removeSlot(index)} type="button" aria-label={korean ? `${index + 1}번째 후보 삭제` : `${index + 1}番目の候補を削除`}>×</button>}</div>)}{slots.length < 12 && <button className="add-row" onClick={() => setSlots((current) => [...current, ""])} type="button">{korean ? "＋ 후보 추가" : "＋ 候補を追加"}</button>}</section>
     <section className="event-options"><p className="eyebrow">{korean ? "모임 설정" : "予定の設定"}</p><label className="option-toggle"><input type="checkbox" checked={collectOrigins} onChange={(event) => setCollectOrigins(event.target.checked)} /><span><b>{korean ? "참가자 출발지 받기" : "参加者に出発地を入力してもらう"}</b><small>{korean ? "장소 추천에만 사용하고 정확한 좌표는 공개하지 않아요." : "場所のおすすめにのみ使い、正確な座標は公開しません。"}</small></span></label><label className="option-toggle"><input type="checkbox" checked={allowParticipantSlotAdd} onChange={(event) => setAllowParticipantSlotAdd(event.target.checked)} /><span><b>{korean ? "참가자의 후보 날짜 추가 허용" : "参加者による候補日の追加を許可"}</b><small>{korean ? "참가자가 직접 새 날짜·시간 후보를 제안할 수 있어요." : "参加者も新しい日時候補を提案できます。"}</small></span></label><label className="field small-field"><span>{korean ? <>응답 마감 <em>선택</em></> : <>回答期限 <em>任意</em></>}</span><input type="datetime-local" value={responseDeadline} onChange={(event) => setResponseDeadline(event.target.value)} /></label></section>
