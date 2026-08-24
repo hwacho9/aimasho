@@ -88,6 +88,11 @@ export async function cancelMeetup(meetupId: string) {
   await callable<{ meetupId: string }, { status: string }>("cancelMeetup")({ meetupId });
 }
 
+export async function deleteMeetup(meetupId: string) {
+  await callable<{ meetupId: string }, { meetupId: string }>("deleteMeetup")({ meetupId });
+  trackAnalyticsEvent("meetup_deleted");
+}
+
 export async function getRecommendation(meetupId: string): Promise<Recommendation> {
   await ensureAnonymousUser();
   const response = await callable<{ meetupId: string }, Recommendation>("calculateScheduleRecommendation")({ meetupId });
@@ -192,6 +197,12 @@ export async function saveDefaultOrigin(defaultOrigin: Location) {
 export async function createRoom(name: string, displayName: string) {
   const response = await callable<{ name: string; displayName: string }, { roomId: string; inviteCode: string }>("createRoom")({ name, displayName });
   trackAnalyticsEvent("room_created");
+  return response.data;
+}
+
+export async function deleteRoom(roomId: string) {
+  const response = await callable<{ roomId: string }, { roomId: string; preservedMeetupCount: number }>("deleteRoom")({ roomId });
+  trackAnalyticsEvent("room_deleted");
   return response.data;
 }
 

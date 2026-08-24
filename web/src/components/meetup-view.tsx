@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { addCandidateSlot, confirmSchedule, getMeetupRelationships, getRecommendation, saveProfile, submitVote, subscribeToMeetup, updateConfirmedSchedule } from "@/services/meetup-repository";
+import { useRouter } from "next/navigation";
+import { addCandidateSlot, confirmSchedule, deleteMeetup, getMeetupRelationships, getRecommendation, saveProfile, submitVote, subscribeToMeetup, updateConfirmedSchedule } from "@/services/meetup-repository";
 import { continueWithGoogle, firebase } from "@/lib/firebase/client";
 import { relationshipLabel } from "@/lib/relationship-label";
 import type { AvailabilityVote, MeetupDetail, Recommendation, RelationshipStat, VoteStatus } from "@/types/meetup";
@@ -29,6 +30,7 @@ function tokyoDateTimeInput(value: string) {
 }
 
 export function MeetupView({ meetupId }: { meetupId: string }) {
+  const router = useRouter();
   const { language, locale } = useLanguage();
   const korean = language === "ko";
   const displayDate = (value: string) => new Intl.DateTimeFormat(locale, { timeZone: "Asia/Tokyo", month: "long", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
@@ -43,6 +45,7 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
   const [scheduledTimeInput, setScheduledTimeInput] = useState("");
   const [newCandidateDateTime, setNewCandidateDateTime] = useState("");
   const [candidateBusy, setCandidateBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const refreshRecommendation = useCallback(async () => {
     try {
@@ -150,6 +153,23 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
     }
   };
 
+  const removeMeetup = async () => {
+    const confirmed = window.confirm(korean
+      ? "이 일정을 삭제할까요? 투표, 플랜, 정산을 포함한 모든 내용이 삭제되며 되돌릴 수 없어요."
+      : "この予定を削除しますか？投票、プラン、精算を含むすべての内容が削除され、元に戻せません。");
+    if (!confirmed) return;
+    setDeleting(true);
+    setError(undefined);
+    try {
+      await deleteMeetup(meetupId);
+      router.replace("/profile");
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : korean ? "일정을 삭제하지 못했어요." : "予定を削除できませんでした。");
+      setDeleting(false);
+    }
+  };
+
   if (!detail) return <main className="loading-page"><div className="loader" /><p>{korean ? "약속을 불러오고 있어요..." : "予定を読み込んでいます…"}</p></main>;
 
   const { meetup, participants, candidateSlots, votes } = detail;
@@ -189,7 +209,7 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
     </section>
 
     {confirmed && !finished && meetup.confirmedDateTime && <ConfirmedScheduleResponse meetupId={meetupId} participants={participants} currentUid={uid} confirmedDateTime={meetup.confirmedDateTime} previousConfirmedDateTime={meetup.previousConfirmedDateTime} />}
-    {isHost && !confirmed && <ShareCard meetupId={meetupId} title={meetup.title} />}
+    <ShareCard meetupId={meetupId} title={meetup.title} />
 
     <section className="schedule-section">
       <div className="section-heading"><div><p className="eyebrow">{korean ? "언제" : "いつ"}</p><h2>{cancelled ? korean ? "취소된 일정" : "中止された予定" : confirmed ? korean ? "정해진 일정" : "決まった予定" : korean ? "언제가 좋아요?" : "いつがいい？"}</h2></div><span>{votes.length}/{participants.length * candidateSlots.length} {korean ? "응답" : "回答"}</span></div>
@@ -207,6 +227,7 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
     <MeetupNextSteps meetupId={meetupId} detail={detail} currentUid={uid} isHost={isHost} onChanged={() => void refreshRecommendation()} />
     <EventPlanPanel meetupId={meetupId} detail={detail} isHost={isHost} />
     {isAnonymous && <section className="account-card"><div><p className="eyebrow">{korean ? "약속을 계속 저장하기" : "予定を保存しよう"}</p><h2>{korean ? "다음 약속도 aimasho에서?" : "次の予定もaimashoで？"}</h2><p>{korean ? "계정을 만들면 이번 약속을 저장하고, 그룹으로 친구들과 더 쉽게 만날 수 있어요." : "アカウントを作るとこの予定を保存し、グループで友だちともっと気軽に会えます。"}</p></div><button className="secondary-button" onClick={() => void upgradeAccount()} disabled={accountBusy}>{accountBusy ? korean ? "연결 중..." : "連携中…" : korean ? "Google로 계속하기" : "Googleで続ける"}</button></section>}
+    {isHost && <section className="danger-zone"><div><p className="eyebrow">{korean ? "일정 관리" : "予定の管理"}</p><h2>{korean ? "이 일정 삭제" : "この予定を削除"}</h2><p>{korean ? "투표, 플랜, 정산을 포함한 일정 전체가 영구 삭제됩니다." : "投票、プラン、精算を含む予定全体が完全に削除されます。"}</p></div><button className="danger-button" type="button" onClick={() => void removeMeetup()} disabled={deleting}>{deleting ? korean ? "삭제 중..." : "削除中…" : korean ? "일정 삭제" : "予定を削除"}</button></section>}
     {error && <p className="error-message page-error" role="alert">{error}</p>}
   </main>;
 }

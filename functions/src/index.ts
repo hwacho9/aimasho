@@ -800,6 +800,22 @@ export const cancelMeetup = onCall(async (request) => {
   return { status: "CANCELLED" };
 });
 
+/** Permanently removes a meetup and every nested vote, plan, route, and expense. */
+export const deleteMeetup = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  await requireHost(meetupId, uid);
+  const meetup = db.doc(`meetups/${meetupId}`);
+  const notifications = await db.collection("departureNotifications").where("meetupId", "==", meetupId).get();
+  await db.recursiveDelete(meetup);
+  if (!notifications.empty) {
+    const writer = db.bulkWriter();
+    notifications.docs.forEach((notification) => writer.delete(notification.ref));
+    await writer.close();
+  }
+  return { meetupId };
+});
+
 export const calculateScheduleRecommendation = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
@@ -1294,6 +1310,24 @@ export const createRoom = onCall(async (request) => {
   batch.set(room.collection("members").doc(uid), { uid, displayName, role: "OWNER", joinedAt: FieldValue.serverTimestamp() });
   await batch.commit();
   return { roomId: room.id, inviteCode };
+});
+
+/** Deletes only the group. Existing meetup history is preserved ungrouped. */
+export const deleteRoom = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const roomId = requireString(request.data?.roomId, "roomId", 128);
+  const room = db.doc(`rooms/${roomId}`);
+  const snapshot = await room.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Room not found.");
+  if (snapshot.data()?.ownerUid !== uid) throw new HttpsError("permission-denied", "Only the Room owner can delete it.");
+  const meetups = await db.collection("meetups").where("roomId", "==", roomId).get();
+  if (!meetups.empty) {
+    const writer = db.bulkWriter();
+    meetups.docs.forEach((meetup) => writer.update(meetup.ref, { roomId: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() }));
+    await writer.close();
+  }
+  await db.recursiveDelete(room);
+  return { roomId, preservedMeetupCount: meetups.size };
 });
 
 export const getRoomInvitePreview = onCall(async (request) => {
