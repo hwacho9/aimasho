@@ -216,6 +216,7 @@ export interface HistoryMeetup {
   roomId?: string | null;
   roomName?: string | null;
   occurrence?: number;
+  isOwner?: boolean;
 }
 
 export interface HomeDashboardData {

@@ -378,6 +378,7 @@ interface HistoryMeetupPayload {
   planPlaces: Location[];
   candidateDateTimes: string[];
   roomId: string | null;
+  isOwner?: boolean;
 }
 
 function timestampIso(value: unknown): string | null {
@@ -1405,15 +1406,17 @@ async function dashboardCollectionGroupDocs(collectionGroup: "participants" | "m
 export const getMyDashboard = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   if (request.auth?.token.firebase?.sign_in_provider === "anonymous") throw new HttpsError("failed-precondition", "Create an account to use the dashboard.");
-  const [profile, participationDocs, relationships, membershipDocs] = await Promise.all([
+  const [profile, participationDocs, relationships, membershipDocs, ownedMeetups] = await Promise.all([
     db.doc(`users/${uid}`).get(),
     dashboardCollectionGroupDocs("participants", uid, 100),
     db.collection(`users/${uid}/relationships`).orderBy("lastMeetupAt", "desc").limit(50).get(),
     dashboardCollectionGroupDocs("members", uid, 50),
+    db.collection("meetups").where("createdByUid", "==", uid).limit(100).get(),
   ]);
   if (profile.data()?.accountType !== "REGISTERED") throw new HttpsError("failed-precondition", "Create an account to use the dashboard.");
   const meetupSnapshots = await Promise.all(participationDocs.map((participation) => participation.ref.parent.parent?.get()));
   const uniqueMeetups = new Map<string, DocumentSnapshot>();
+  ownedMeetups.docs.forEach((meetup) => uniqueMeetups.set(meetup.id, meetup));
   meetupSnapshots.forEach((meetup) => { if (meetup?.exists) uniqueMeetups.set(meetup.id, meetup); });
   const histories = await Promise.all([...uniqueMeetups.values()].map(async (snapshot): Promise<HistoryMeetupPayload> => {
     const data = snapshot.data();
@@ -1436,6 +1439,7 @@ export const getMyDashboard = onCall(async (request) => {
       planPlaces: [],
       candidateDateTimes: candidateDate ? [candidateDate] : [],
       roomId: typeof data?.roomId === "string" ? data.roomId : null,
+      isOwner: data?.createdByUid === uid,
     };
   }));
 

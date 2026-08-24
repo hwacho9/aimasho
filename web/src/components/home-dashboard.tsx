@@ -55,7 +55,8 @@ export function HomeDashboard() {
     }
     return result;
   }, [data?.meetups]);
-  const timeline = useMemo(() => data?.meetups.filter((meetup) => meetupDate(meetup)).slice(0, 12) ?? [], [data?.meetups]);
+  const timeline = useMemo(() => data?.meetups.slice(0, 12) ?? [], [data?.meetups]);
+  const ownedUpcoming = useMemo(() => data?.meetups.filter((meetup) => meetup.isOwner && !["COMPLETED", "CANCELLED"].includes(meetup.status)) ?? [], [data?.meetups]);
   const moveMonth = (offset: number) => setMonth((current) => {
     const value = new Date(Date.UTC(current.year, current.month - 1 + offset, 1));
     return { year: value.getUTCFullYear(), month: value.getUTCMonth() + 1 };
@@ -68,6 +69,7 @@ export function HomeDashboard() {
   return <section className="home-dashboard" aria-labelledby="home-dashboard-title">
     <div className="dashboard-heading"><div><p className="eyebrow">MY AIMASHO</p><h2 id="home-dashboard-title">{korean ? `${data.displayName}님의 일정 보드` : `${data.displayName}さんの予定ボード`}</h2><p>{korean ? "다가오는 약속과 함께한 기록을 한 흐름에서 확인해요." : "これからの予定と一緒に過ごした記録を一つの流れで確認できます。"}</p></div><Link className="secondary-button" href="/new">{korean ? "+ 약속 만들기" : "+ 予定を作る"}</Link></div>
     <div className="dashboard-summary"><div><b>{data.summary.upcomingMeetupCount}</b><span>{korean ? "다가오는 약속" : "これからの予定"}</span></div><div><b>{data.summary.completedMeetupCount}</b><span>{korean ? "함께한 날" : "一緒に過ごした日"}</span></div><div><b>{data.summary.friendCount}</b><span>{korean ? "함께한 친구" : "一緒に会った友だち"}</span></div><div><b>{data.summary.groupCount}</b><span>{korean ? "그룹" : "グループ"}</span></div></div>
+    {ownedUpcoming.length > 0 && <section className="dashboard-owned"><div className="mini-section-heading"><div><p className="eyebrow">CREATED BY ME</p><h3>{korean ? "내가 만든 일정" : "自分が作った予定"}</h3></div><span>{ownedUpcoming.length}{korean ? "개" : "件"}</span></div><div className="dashboard-owned-list">{ownedUpcoming.map((meetup) => <Link href={`/m/${meetup.id}`} key={meetup.id}><span><b>{meetup.title}</b><small>{displayDate(meetupDate(meetup))}{meetup.roomName ? ` · ${meetup.roomName}` : ""}</small></span><em>{meetup.status === "SCHEDULING" ? korean ? "설정·조율 중" : "設定・調整中" : statusCopy(meetup, korean)}</em></Link>)}</div></section>}
     <div className="dashboard-view-heading"><h3>{korean ? "내 캘린더" : "マイカレンダー"}</h3><div className="history-view-toggle"><button className={view === "CALENDAR" ? "active" : ""} onClick={() => setView("CALENDAR")}>{korean ? "캘린더" : "カレンダー"}</button><button className={view === "TIMELINE" ? "active" : ""} onClick={() => setView("TIMELINE")}>{korean ? "타임라인" : "タイムライン"}</button></div></div>
     {view === "CALENDAR" ? <div className="dashboard-calendar"><div className="calendar-month-heading"><button type="button" onClick={() => moveMonth(-1)} aria-label={korean ? "이전 달" : "前の月"}>‹</button><b>{month.year}. {String(month.month).padStart(2, "0")}</b><button type="button" onClick={() => moveMonth(1)} aria-label={korean ? "다음 달" : "次の月"}>›</button></div><div className="calendar-weekdays">{(korean ? ["일", "월", "화", "수", "목", "금", "토"] : ["日", "月", "火", "水", "木", "金", "土"]).map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{monthCells.map((day, index) => {
       if (!day) return <span className="calendar-day empty" key={`empty-${index}`} />;
