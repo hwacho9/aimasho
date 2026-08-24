@@ -1329,6 +1329,19 @@ export const getMyRooms = onCall(async (request) => {
   return { rooms: rooms.filter((room): room is NonNullable<typeof room> => room !== null) };
 });
 
+async function dashboardCollectionGroupDocs(collectionGroup: "participants" | "members", uid: string, limit: number) {
+  try {
+    return (await db.collectionGroup(collectionGroup).where("uid", "==", uid).limit(limit).get()).docs;
+  } catch (caught) {
+    const code = typeof caught === "object" && caught && "code" in caught ? Number(caught.code) : undefined;
+    if (code !== 9) throw caught;
+    // Single-field collection-group indexes can briefly be unavailable during
+    // a deploy. Keep the signed-in home usable while Firestore finishes them.
+    console.warn("Dashboard collection-group index is not ready", { collectionGroup, uid });
+    return [];
+  }
+}
+
 /** One read model for the signed-in home calendar, timeline, friends, and groups. */
 export const getMyDashboard = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
@@ -1339,18 +1352,18 @@ export const getMyDashboard = onCall(async (request) => {
     console.error("Could not refresh dashboard relationships", { uid, message: caught instanceof Error ? caught.message : "Unknown error" });
   }
 
-  const [profile, participations, relationships, memberships] = await Promise.all([
+  const [profile, participationDocs, relationships, membershipDocs] = await Promise.all([
     db.doc(`users/${uid}`).get(),
-    db.collectionGroup("participants").where("uid", "==", uid).limit(100).get(),
+    dashboardCollectionGroupDocs("participants", uid, 100),
     db.collection(`users/${uid}/relationships`).orderBy("lastMeetupAt", "desc").limit(50).get(),
-    db.collectionGroup("members").where("uid", "==", uid).limit(50).get(),
+    dashboardCollectionGroupDocs("members", uid, 50),
   ]);
-  const meetupSnapshots = await Promise.all(participations.docs.map((participation) => participation.ref.parent.parent?.get()));
+  const meetupSnapshots = await Promise.all(participationDocs.map((participation) => participation.ref.parent.parent?.get()));
   const uniqueMeetups = new Map<string, DocumentSnapshot>();
   meetupSnapshots.forEach((meetup) => { if (meetup?.exists) uniqueMeetups.set(meetup.id, meetup); });
   const histories = await Promise.all([...uniqueMeetups.values()].map(historyMeetupPayload));
 
-  const roomSnapshots = await Promise.all(memberships.docs.map((membership) => membership.ref.parent.parent?.get()));
+  const roomSnapshots = await Promise.all(membershipDocs.map((membership) => membership.ref.parent.parent?.get()));
   const roomById = new Map(roomSnapshots.filter((room): room is DocumentSnapshot => Boolean(room?.exists)).map((room) => [room.id, room]));
   const completedByRoom = new Map<string, number>();
   histories.filter((meetup) => meetup.status === "COMPLETED" && meetup.roomId).forEach((meetup) => completedByRoom.set(meetup.roomId!, (completedByRoom.get(meetup.roomId!) ?? 0) + 1));
@@ -1359,7 +1372,7 @@ export const getMyDashboard = onCall(async (request) => {
     const date = meetup.confirmedDateTime ?? meetup.candidateDateTimes[0];
     if (date && (!nextByRoom.get(meetup.roomId!) || date < nextByRoom.get(meetup.roomId!)!)) nextByRoom.set(meetup.roomId!, date);
   });
-  const rooms = memberships.docs.flatMap((membership) => {
+  const rooms = membershipDocs.flatMap((membership) => {
     const room = membership.ref.parent.parent ? roomById.get(membership.ref.parent.parent.id) : undefined;
     return room ? [{
       id: room.id,
