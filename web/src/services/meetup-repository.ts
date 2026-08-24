@@ -230,6 +230,7 @@ export async function joinRoom(inviteCode: string, displayName: string) {
 }
 
 export async function getRoomInvitePreview(inviteCode: string) {
+  await ensureAnonymousUser();
   const response = await callable<{ inviteCode: string }, { roomId: string; name: string; ownerName: string }>("getRoomInvitePreview")({ inviteCode });
   return response.data;
 }

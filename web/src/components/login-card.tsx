@@ -7,7 +7,7 @@ import { useLanguage } from "@/components/language-provider";
 import { continueWithGoogle, firebase } from "@/lib/firebase/client";
 import { saveProfile } from "@/services/meetup-repository";
 
-export function LoginCard() {
+export function LoginCard({ nextPath }: { nextPath?: string }) {
   const { language } = useLanguage();
   const korean = language === "ko";
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -24,7 +24,7 @@ export function LoginCard() {
       // callable function sees the Google sign-in provider immediately.
       await user.getIdToken(true);
       await saveProfile(user.displayName || (korean ? "aimasho 사용자" : "aimasho ユーザー"));
-      window.location.replace("/profile");
+      window.location.replace(nextPath ?? "/profile");
     } catch (caught) {
       completionStarted.current = false;
       const code = typeof caught === "object" && caught && "code" in caught ? String(caught.code) : "";
@@ -63,5 +63,5 @@ export function LoginCard() {
     }
   };
 
-  return <main className="login-page"><section className="login-card" aria-labelledby="login-title"><p className="eyebrow">{korean ? "ACCOUNT" : "アカウント"}</p><h1 id="login-title">{korean ? "로그인 / 회원가입" : "ログイン・新規登録"}</h1><p className="login-description">{korean ? "Google 계정으로 로그인하세요. 처음이라면 회원가입이 자동으로 완료돼요." : "Google アカウントでログインしてください。初めての場合は自動で登録されます。"}</p><button className="google-login-button" type="button" onClick={() => void signIn()} disabled={isSubmitting}><span className="google-mark" aria-hidden="true">G</span>{isSubmitting ? korean ? "로그인 중…" : "ログイン中…" : korean ? "Google로 계속하기" : "Google で続ける"}</button><p className="login-helper">{korean ? "게스트로 만든 약속이 있다면 같은 브라우저에서 로그인할 때 계정에 그대로 연결됩니다." : "ゲストで作成した予定は、同じブラウザでログインするとアカウントにそのまま引き継がれます。"}</p>{error ? <p className="error-message" role="alert">{error}</p> : null}<Link className="secondary-link" href="/">{korean ? "로그인 없이 계속하기" : "ログインせずに続ける"}</Link></section></main>;
+  return <main className="login-page"><section className="login-card" aria-labelledby="login-title"><p className="eyebrow">{korean ? "ACCOUNT" : "アカウント"}</p><h1 id="login-title">{korean ? "로그인 / 회원가입" : "ログイン・新規登録"}</h1><p className="login-description">{korean ? "Google 계정으로 로그인하세요. 처음이라면 회원가입이 자동으로 완료돼요." : "Google アカウントでログインしてください。初めての場合は自動で登録されます。"}</p>{nextPath?.startsWith("/r/") || nextPath?.startsWith("/rooms/") ? <p className="login-return-note">👥 {korean ? "로그인 후 보고 있던 그룹 화면으로 돌아갑니다." : "ログイン後、見ていたグループ画面に戻ります。"}</p> : null}<button className="google-login-button" type="button" onClick={() => void signIn()} disabled={isSubmitting}><span className="google-mark" aria-hidden="true">G</span>{isSubmitting ? korean ? "로그인 중…" : "ログイン中…" : korean ? "Google로 계속하기" : "Google で続ける"}</button><p className="login-helper">{korean ? "게스트로 만든 약속이 있다면 같은 브라우저에서 로그인할 때 계정에 그대로 연결됩니다." : "ゲストで作成した予定は、同じブラウザでログインするとアカウントにそのまま引き継がれます。"}</p>{error ? <p className="error-message" role="alert">{error}</p> : null}<Link className="secondary-link" href={nextPath ?? "/"}>{korean ? nextPath ? "로그인 없이 이전 화면으로" : "로그인 없이 계속하기" : nextPath ? "ログインせず前の画面へ" : "ログインせずに続ける"}</Link></section></main>;
 }
