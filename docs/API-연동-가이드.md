@@ -9,7 +9,7 @@ Web (Next.js) / Mobile (Flutter)
         │ Firebase Authentication 토큰
         ▼
 Firebase Callable Functions (asia-northeast1)
-        ├─ Cloud Firestore: 약속·참가자·투표·정산·Room
+        ├─ Cloud Firestore: 약속·참가자·관계·투표·정산·Room
         ├─ Google Places API: 장소 검색
         ├─ Google Routes API: 대중교통 경로·소요 시간
         └─ Firebase Cloud Messaging: 출발 알림
@@ -44,10 +44,35 @@ NEXT_PUBLIC_FIREBASE_PROJECT_ID=
 NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
 NEXT_PUBLIC_FIREBASE_APP_ID=
+NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=
 NEXT_PUBLIC_USE_FIREBASE_EMULATOR=false
 ```
 
 `NEXT_PUBLIC_*` 값은 브라우저에 노출되는 Firebase 앱 식별 정보입니다. Firebase 보안의 핵심은 API 키 은닉이 아니라 Authentication, Firestore Rules, Callable Functions 권한 검증입니다.
+
+`NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID`에는 Firebase 웹 앱 설정의 `measurementId`(`G-`로 시작)를 넣습니다. 값이 없으면 웹 Analytics는 자동으로 비활성화되므로 로컬 개발과 에뮬레이터 테스트 데이터는 운영 분석 속성으로 전송되지 않습니다.
+
+### Google 로그인 설정
+
+웹의 `/login`은 Google 계정 하나로 로그인과 신규 가입을 함께 처리합니다. 별도의 Google OAuth 클라이언트 ID나 클라이언트 보안 키를 Web 환경 변수에 넣을 필요는 없습니다. Firebase Authentication이 Google 제공업체 설정과 OAuth 처리를 담당합니다.
+
+1. Firebase Console에서 프로젝트를 열고 **Authentication** → **Sign-in method**로 이동합니다.
+2. **Google**을 선택해 사용 설정하고, 프로젝트 지원 이메일과 앱에 표시할 이름을 확인한 뒤 **저장**합니다.
+3. **Anonymous**도 사용 설정 상태로 유지합니다. 로그인 전 게스트로 만든 약속을 Google 계정으로 연결할 때 같은 Firebase 사용자 ID를 유지하기 때문입니다.
+4. **Authentication** → **Settings** → **Authorized domains**에서 실제 배포 도메인(예: `aimasho.example`)을 추가합니다. 로컬에서 `localhost`가 허용 목록에 없다면 `localhost`도 추가합니다. `127.0.0.1`로 개발 서버를 열 때 로그인 오류가 나면 `localhost:3000` 대신 `http://localhost:3000`으로 접속해 확인하는 편이 안전합니다.
+5. `web/.env.local`의 `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`은 Firebase Web 앱 설정에 나온 값(일반적으로 `<프로젝트 ID>.firebaseapp.com`)을 유지하고, 개발 서버를 다시 시작합니다.
+
+홈 화면의 **로그인** 또는 **이미 계정이 있나요? 로그인**을 누르면 `/login`으로 이동합니다. 이미 게스트로 약속을 만들었다면 같은 브라우저에서 Google로 로그인할 경우 그 게스트 계정에 Google 자격 증명을 연결해 기존 약속을 유지합니다.
+
+#### `installations/request-failed` (400 `INVALID_ARGUMENT`) 해결
+
+이 오류는 지도 경로 API 오류가 아니라 Firebase Web SDK가 브라우저 설치 ID를 만들 때 Firebase 앱 설정을 거절한 경우입니다. 다음 순서로 확인합니다.
+
+1. Firebase Console → **프로젝트 설정** → **내 앱** → 등록한 **웹 앱** → **SDK 설정 및 구성**에서 표시되는 `firebaseConfig`를 다시 복사합니다. 그 값과 동일하게 `NEXT_PUBLIC_FIREBASE_API_KEY`, `PROJECT_ID`, `APP_ID`, `MESSAGING_SENDER_ID`를 입력합니다. 이 네 값은 다른 Firebase 프로젝트나 모바일 앱의 값과 섞으면 안 됩니다.
+2. `NEXT_PUBLIC_FIREBASE_API_KEY`에는 Google Maps 키가 아니라 위 `firebaseConfig`의 `apiKey`를 넣습니다. Maps/Routes/Places용 키는 `functions/.env`의 `GOOGLE_MAPS_SERVER_API_KEY`에만 둡니다.
+3. Google Cloud Console → **APIs 및 서비스** → **사용자 인증 정보**에서 Firebase 웹 앱 키의 제한을 확인합니다. Maps API만 허용한 키를 Firebase 키로 사용하면 안 됩니다. Firebase가 자동 생성한 웹 키를 쓰거나, 해당 키의 Firebase 관련 API 제한을 유지합니다.
+4. 개발 서버를 완전히 종료한 뒤 `cd web && npm run dev`로 다시 시작하고 `http://localhost:3000`에서 다시 확인합니다.
+5. 설정을 바로잡은 뒤에도 로컬에서만 반복되면 Chrome 개발자 도구 → **Application** → **IndexedDB**의 `firebase-installations-database`만 삭제하고 새로고침합니다. **Clear site data**는 익명 로그인 상태까지 지울 수 있으므로, 게스트로 만든 테스트 약속이 있다면 사용하지 마세요.
 
 ### Flutter — `mobile/firebase.env.json`
 
@@ -57,6 +82,24 @@ NEXT_PUBLIC_USE_FIREBASE_EMULATOR=false
 cd mobile
 flutter run --dart-define-from-file=firebase.env.json
 ```
+
+`firebase.env.json`에는 필요하면 `FIREBASE_MEASUREMENT_ID`도 추가합니다. iOS/Android/macOS 앱은 Firebase Console에 각 플랫폼 앱을 등록한 뒤 Firebase 설정의 앱 ID를 기존 `FIREBASE_APP_ID`에 넣어야 합니다.
+
+### Google Analytics 설정 및 이벤트
+
+1. Firebase Console → **프로젝트 설정** → **통합**에서 Google Analytics를 사용 설정합니다.
+2. 웹 Firebase 앱 설정의 `measurementId`를 Web/Flutter 환경 파일에 설정합니다.
+3. Flutter 앱을 새로 등록하거나 플랫폼을 추가했다면 `flutterfire configure`를 실행해 Firebase 앱 등록 정보를 최신화합니다.
+
+앱은 화면 사용량과 아래처럼 익명화된 제품 행동만 수집합니다. 약속 제목, 참가자 이름, 장소, 초대 코드, 문서 ID, 지출 금액은 이벤트 매개변수로 보내지 않습니다.
+
+| 이벤트 | 발생 시점 |
+| --- | --- |
+| `meetup_created`, `meetup_joined` | 약속 생성 또는 참여 성공 |
+| `schedule_confirmed`, `meeting_place_confirmed` | 일정 또는 만남 장소 확정 성공 |
+| `routes_calculated` | 출발 시간 계산 성공 |
+| `expense_created`, `expense_updated`, `expense_deleted` | 지출 추가·수정·삭제 성공 |
+| `room_created`, `room_joined` | Room 생성 또는 참여 성공 |
 
 ### Functions — `functions/.env`
 
@@ -157,21 +200,55 @@ Emulator 포트는 Authentication `9099`, Functions `5001`, Firestore `8080`, Em
 | 함수 | 호출 주체 | 설명 |
 | --- | --- | --- |
 | `createExpense` | 참가자 | 엔화 정수 금액, 결제자, 분담 대상을 기록합니다. |
+| `updateExpense` | 지출 등록자 | 기존 지출의 항목·금액·결제자·분담 대상을 수정합니다. |
+| `deleteExpense` | 지출 등록자 | 본인이 등록한 지출 항목을 삭제합니다. |
 | `calculateSettlementResult` | 참가자 | 잔액과 최소 송금 횟수의 정산 결과를 계산합니다. |
 
-금액은 소수점 없는 엔화 정수만 허용합니다. 이 기능은 정산 안내만 제공하며 실제 결제를 실행하지 않습니다.
+금액은 소수점 없는 엔화 정수만 허용합니다. 지출 수정과 삭제는 화면 버튼뿐 아니라 서버에서도 지출 등록자만 허용합니다. 이 기능은 정산 안내만 제공하며 실제 결제를 실행하지 않습니다.
 
 ### 프로필 및 Room
 
 | 함수 | 호출 주체 | 설명 |
 | --- | --- | --- |
 | `saveProfile` | 로그인 사용자 | 표시 이름과 계정 상태를 저장합니다. |
+| `getMeetupRelationships` | 약속 참가자인 등록 계정 | 현재 약속에서 함께한 등록 사용자별 약속 횟수와 관계 단계를 표시할 수 있는 집계를 가져옵니다. |
+| `getMyRelationships` | 등록 계정 | 내 프로필에 표시할 전체 관계 목록을 최근 약속 순으로 가져옵니다. |
 | `saveDefaultOrigin` | 등록 계정 | 기본 출발지를 저장합니다. |
 | `createRoom` | 등록 계정 | Room과 초대 코드를 만듭니다. |
 | `getRoomInvitePreview` | 로그인 사용자 | `/r/{inviteCode}`에서 Room 이름·생성자 정보를 보여줍니다. |
 | `joinRoom` | 등록 계정 | 초대 코드로 Room에 참가합니다. |
 | `getMyRooms` | 등록 계정 | 현재 계정이 참여한 Room 목록을 가져옵니다. |
 | `getRoomDetail` | Room 멤버 | 멤버와 Room 약속 목록을 가져옵니다. |
+
+#### 친구 관계·약속 횟수 집계
+
+관계 데이터는 **프로필을 저장한 등록 계정끼리만** 생성합니다. 같은 약속의 참가자로 기록된 두 사람이 있으면 그 약속을 한 번으로 세며, 익명 참가자는 집계와 관계 화면에 포함하지 않습니다. 동일 약속을 새로고침하거나 재참여해도 서버가 약속별 사용자 쌍 마커를 확인하므로 중복 증가하지 않습니다.
+
+프로필을 나중에 Google 계정으로 전환하면 `saveProfile`과 관계 조회 시점에 과거 참여 약속도 한 번씩 보정합니다. 화면용 관계 단계는 다음 기준입니다.
+
+| 함께한 약속 수 | 관계 단계 |
+| --- | --- |
+| 1회 | 새로운 친구 |
+| 2–3회 | 함께 만나는 사이 |
+| 4–7회 | 자주 만나는 친구 |
+| 8회 이상 | 찐친 |
+
+두 조회 API의 응답 항목은 아래와 같습니다.
+
+```json
+{
+  "relationships": [
+    {
+      "otherUid": "친구 Firebase UID",
+      "displayName": "유키",
+      "sharedMeetupCount": 4,
+      "lastMeetupId": "가장 최근에 함께한 약속 ID"
+    }
+  ]
+}
+```
+
+관계 문서는 `users/{uid}/relationships/{otherUid}`에 서버만 기록합니다. 클라이언트는 다른 사람의 전체 관계 목록을 Firestore에서 직접 읽을 수 없고, 자신의 데이터만 위 Callable API를 통해 받습니다.
 
 ## 6. Google Maps API 동작
 

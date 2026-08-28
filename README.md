@@ -27,6 +27,10 @@ The repository runs with deterministic Japanese station data by default. Copy `f
 
 For local emulators, use a development Firebase project ID in the same settings and set `NEXT_PUBLIC_USE_FIREBASE_EMULATOR=true` for Web and `USE_FIREBASE_EMULATOR=true` in the Flutter env file. Start with `npm run emulators` from the repository root.
 
+### Google Analytics
+
+Enable Google Analytics in Firebase Console → Project settings → Integrations. Copy the Firebase Web app's Measurement ID (the `G-...` value) into `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` and `FIREBASE_MEASUREMENT_ID`. The web app records page use automatically and both clients log only anonymous product events such as meetup creation, joining, route calculation, and expense changes. Names, titles, locations, IDs, and amounts are never sent as event parameters.
+
 ### Departure reminders
 
 When the Flutter app is allowed to send notifications, it registers an FCM token only for the participant's own route. `sendDepartureNotifications` is a Cloud Scheduler job that checks due routes every minute. Before a production deployment, enable Firebase Cloud Messaging and Cloud Scheduler; iOS also needs an APNs key/certificate configured in Firebase. The scheduled-job records and device tokens are server-only.

@@ -53,3 +53,7 @@ Input `{ "meetupId": "...", "slotId": "..." }`; host-only. It records `SCHEDULE_
 ## Phase 8: profiles and Rooms
 
 `saveProfile` and `saveDefaultOrigin` support registered accounts. `createRoom`, `joinRoom`, `getMyRooms`, `getRoomDetail`, and `getRoomInvitePreview` manage persistent Room membership. Room creation and joining reject anonymous accounts. Room invite URLs use `/r/{inviteCode}`.
+
+`getMeetupRelationships` accepts `{ "meetupId": "..." }` from a meetup participant and returns the caller's relationship summaries for other registered participants in that meetup. `getMyRelationships` has no input and returns the caller's summaries ordered by the most recent shared meetup. Each item is `{ "otherUid", "displayName", "sharedMeetupCount", "lastMeetupId" }`.
+
+Only pairs with saved registered profiles are counted. A pair has at most one count per meetup, including retries and re-joins. When an anonymous account later becomes registered through `saveProfile`, relationship history is backfilled from its prior meetup participations.
