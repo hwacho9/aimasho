@@ -15,6 +15,11 @@ abstract final class FirebaseBootstrap {
   static const _authDomain = String.fromEnvironment('FIREBASE_AUTH_DOMAIN');
   static const _storageBucket =
       String.fromEnvironment('FIREBASE_STORAGE_BUCKET');
+  static const _measurementId =
+      String.fromEnvironment('FIREBASE_MEASUREMENT_ID');
+  static const _googleClientId = String.fromEnvironment('GOOGLE_CLIENT_ID');
+  static const _googleServerClientId =
+      String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
   static const _useEmulator = bool.fromEnvironment('USE_FIREBASE_EMULATOR');
 
   static bool get isConfigured => [
@@ -23,6 +28,10 @@ abstract final class FirebaseBootstrap {
         _messagingSenderId,
         _projectId
       ].every((value) => value.isNotEmpty);
+  static String? get googleClientId =>
+      _googleClientId.isEmpty ? null : _googleClientId;
+  static String? get googleServerClientId =>
+      _googleServerClientId.isEmpty ? null : _googleServerClientId;
 
   static Future<bool> initialize() async {
     if (!isConfigured) return false;
@@ -33,7 +42,8 @@ abstract final class FirebaseBootstrap {
             messagingSenderId: _messagingSenderId,
             projectId: _projectId,
             authDomain: _authDomain.isEmpty ? null : _authDomain,
-            storageBucket: _storageBucket.isEmpty ? null : _storageBucket));
+            storageBucket: _storageBucket.isEmpty ? null : _storageBucket,
+            measurementId: _measurementId.isEmpty ? null : _measurementId));
     if (_useEmulator) {
       await FirebaseAuth.instance.useAuthEmulator('127.0.0.1', 9099);
     }
