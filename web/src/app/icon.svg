@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="20" fill="#ec654b"/>
-  <path d="M19 42.5c0-11.7 5.3-21 13-21 8.3 0 13 9.3 13 21h-7.8c0-7.1-1.7-12.2-5.2-12.2-3.1 0-5.2 5-5.2 12.2H19Z" fill="#fffaf4"/>
-  <circle cx="47" cy="18" r="5" fill="#ffbf55"/>
+  <g transform="rotate(-6 32 32)">
+    <rect x="4" y="4" width="56" height="56" rx="18" fill="#ec654b"/>
+    <text x="30" y="45" fill="#fffaf4" font-family="Georgia" font-size="45" font-style="italic" font-weight="700" text-anchor="middle">a</text>
+  </g>
 </svg>

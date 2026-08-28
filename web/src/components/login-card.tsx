@@ -25,7 +25,7 @@ export function LoginCard({ nextPath }: { nextPath?: string }) {
       // callable function sees the Google sign-in provider immediately.
       await user.getIdToken(true);
       await saveProfile(user.displayName || (korean ? "aimasho 사용자" : "aimasho ユーザー"));
-      window.location.replace(nextPath ?? "/profile");
+      window.location.replace(nextPath ?? "/");
     } catch (caught) {
       completionStarted.current = false;
       const code = typeof caught === "object" && caught && "code" in caught ? String(caught.code) : "";
