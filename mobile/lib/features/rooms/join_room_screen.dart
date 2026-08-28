@@ -23,9 +23,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
   @override
   void initState() {
     super.initState();
-    _preview =
-        ref.read(meetupRepositoryProvider).roomInvitePreview(widget.inviteCode);
-    _checkAccount();
+    _preview = _initialize();
   }
 
   @override
@@ -34,13 +32,15 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
     super.dispose();
   }
 
-  Future<void> _checkAccount() async {
-    final user = await ref.read(meetupRepositoryProvider).ensureAnonymousUser();
+  Future<Map<String, String>> _initialize() async {
+    final repository = ref.read(meetupRepositoryProvider);
+    final user = await repository.ensureAnonymousUser();
     if (mounted)
       setState(() {
         _anonymous = user.isAnonymous;
         _name.text = user.displayName ?? '';
       });
+    return repository.roomInvitePreview(widget.inviteCode);
   }
 
   Future<void> _upgrade() async {
