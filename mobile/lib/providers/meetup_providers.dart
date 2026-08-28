@@ -8,9 +8,16 @@ final meetupRepositoryProvider =
     Provider<MeetupRepository>((_) => MeetupRepository());
 final currentUidProvider = StreamProvider<String?>(
     (_) => FirebaseAuth.instance.authStateChanges().map((user) => user?.uid));
+final authUserProvider =
+    StreamProvider<User?>((_) => FirebaseAuth.instance.authStateChanges());
+final dashboardProvider = FutureProvider<HomeDashboard>(
+    (ref) => ref.watch(meetupRepositoryProvider).myDashboard());
 final meetupProvider = StreamProvider.family<MeetupDetail, String>(
     (ref, meetupId) =>
         ref.watch(meetupRepositoryProvider).watchMeetup(meetupId));
 final recommendationProvider = FutureProvider.family<Recommendation, String>(
     (ref, meetupId) =>
         ref.watch(meetupRepositoryProvider).recommendation(meetupId));
+final meetupRelationshipsProvider =
+    FutureProvider.family<List<RelationshipStat>, String>((ref, meetupId) =>
+        ref.watch(meetupRepositoryProvider).meetupRelationships(meetupId));

@@ -32,8 +32,15 @@ class Meetup {
       required this.durationMinutes,
       this.description,
       this.confirmedDateTime,
+      this.previousConfirmedDateTime,
+      this.scheduleChangedAt,
       this.meetingPlace,
-      this.targetArrivalTime});
+      this.targetArrivalTime,
+      this.collectOrigins = true,
+      this.allowParticipantSlotAdd = false,
+      this.responseDeadline,
+      this.contentVoteConfig = const ContentVoteConfig(),
+      this.allowPlanEditing = false});
   final String id;
   final String title;
   final String? description;
@@ -41,9 +48,17 @@ class Meetup {
   final String status;
   final int durationMinutes;
   final DateTime? confirmedDateTime;
+  final DateTime? previousConfirmedDateTime;
+  final DateTime? scheduleChangedAt;
   final Location? meetingPlace;
   final DateTime? targetArrivalTime;
+  final bool collectOrigins;
+  final bool allowParticipantSlotAdd;
+  final DateTime? responseDeadline;
+  final ContentVoteConfig contentVoteConfig;
+  final bool allowPlanEditing;
   bool get isConfirmed => status != 'SCHEDULING';
+  bool get isFinished => status == 'COMPLETED' || status == 'CANCELLED';
 }
 
 class Participant {
@@ -53,13 +68,15 @@ class Participant {
       required this.isGuest,
       required this.isHost,
       this.hasOrigin = false,
-      this.originArea});
+      this.originArea,
+      this.confirmedScheduleAvailability});
   final String uid;
   final String displayName;
   final bool isGuest;
   final bool isHost;
   final bool hasOrigin;
   final String? originArea;
+  final VoteStatus? confirmedScheduleAvailability;
 }
 
 class RelationshipStat {
@@ -75,19 +92,124 @@ class RelationshipStat {
 }
 
 class CandidateSlot {
-  const CandidateSlot({required this.id, required this.startDateTime});
+  const CandidateSlot(
+      {required this.id, required this.startDateTime, this.createdByUid});
   final String id;
   final DateTime startDateTime;
+  final String? createdByUid;
 }
 
 class AvailabilityVote {
   const AvailabilityVote(
       {required this.participantUid,
       required this.slotId,
-      required this.status});
+      required this.status,
+      this.comment});
   final String participantUid;
   final String slotId;
   final VoteStatus status;
+  final String? comment;
+}
+
+enum ContentCategory { food, activity }
+
+extension ContentCategoryValue on ContentCategory {
+  String get value => this == ContentCategory.food ? 'FOOD' : 'ACTIVITY';
+  String get label => this == ContentCategory.food ? '먹고 싶은 것' : '하고 싶은 것';
+
+  static ContentCategory fromValue(String value) =>
+      value == 'ACTIVITY' ? ContentCategory.activity : ContentCategory.food;
+}
+
+class ContentVoteConfig {
+  const ContentVoteConfig(
+      {this.food = false,
+      this.activity = false,
+      this.allowMultiple = false,
+      this.allowParticipantOptions = true});
+  final bool food;
+  final bool activity;
+  final bool allowMultiple;
+  final bool allowParticipantOptions;
+  bool get isEnabled => food || activity;
+}
+
+class ContentOption {
+  const ContentOption(
+      {required this.id,
+      required this.category,
+      required this.label,
+      required this.createdByUid,
+      this.builtIn = false});
+  final String id;
+  final ContentCategory category;
+  final String label;
+  final String createdByUid;
+  final bool builtIn;
+}
+
+class ContentVote {
+  const ContentVote(
+      {required this.participantUid,
+      required this.optionId,
+      required this.category});
+  final String participantUid;
+  final String optionId;
+  final ContentCategory category;
+}
+
+enum PlanItemType { meet, food, activity, cafe, move, other, end }
+
+extension PlanItemTypeValue on PlanItemType {
+  String get value => name;
+  String get label => switch (this) {
+        PlanItemType.meet => '집합',
+        PlanItemType.food => '식사',
+        PlanItemType.activity => '활동',
+        PlanItemType.cafe => '카페',
+        PlanItemType.move => '이동',
+        PlanItemType.other => '기타',
+        PlanItemType.end => '해산'
+      };
+  String get emoji => switch (this) {
+        PlanItemType.meet => '📍',
+        PlanItemType.food => '🍽️',
+        PlanItemType.activity => '✨',
+        PlanItemType.cafe => '☕',
+        PlanItemType.move => '🚇',
+        PlanItemType.other => '📌',
+        PlanItemType.end => '🏁'
+      };
+
+  static PlanItemType fromValue(String value) =>
+      PlanItemType.values.firstWhere((item) => item.name == value,
+          orElse: () => PlanItemType.other);
+}
+
+enum PlanItemStatus { planned, completed, skipped }
+
+class PlanItem {
+  const PlanItem(
+      {required this.id,
+      required this.type,
+      required this.title,
+      required this.status,
+      required this.order,
+      required this.createdByUid,
+      this.place,
+      this.scheduledAt,
+      this.note,
+      this.source = 'manual'});
+  final String id;
+  final PlanItemType type;
+  final String title;
+  final PlanItemStatus status;
+  final int order;
+  final String createdByUid;
+  final Location? place;
+  final DateTime? scheduledAt;
+  final String? note;
+  final String source;
 }
 
 class MeetupDetail {
@@ -97,13 +219,19 @@ class MeetupDetail {
       required this.candidateSlots,
       required this.votes,
       required this.routes,
-      required this.expenses});
+      required this.expenses,
+      required this.contentOptions,
+      required this.contentVotes,
+      required this.planItems});
   final Meetup meetup;
   final List<Participant> participants;
   final List<CandidateSlot> candidateSlots;
   final List<AvailabilityVote> votes;
   final List<ParticipantRoute> routes;
   final List<Expense> expenses;
+  final List<ContentOption> contentOptions;
+  final List<ContentVote> contentVotes;
+  final List<PlanItem> planItems;
 }
 
 class InvitePreview {
@@ -189,16 +317,22 @@ class ParticipantDuration {
 class ParticipantRoute {
   const ParticipantRoute(
       {required this.participantUid,
+      this.originName,
+      this.destinationName,
       required this.durationMinutes,
       required this.transfers,
       required this.routeSummary,
+      this.isEstimate = false,
       required this.externalMapsUrl,
       required this.departureTime,
       required this.arrivalTime});
   final String participantUid;
+  final String? originName;
+  final String? destinationName;
   final int durationMinutes;
   final int transfers;
   final String routeSummary;
+  final bool isEstimate;
   final String externalMapsUrl;
   final DateTime departureTime;
   final DateTime arrivalTime;
@@ -258,10 +392,36 @@ class Room {
 
 class RoomDetail {
   const RoomDetail(
-      {required this.room, required this.members, required this.meetups});
+      {required this.room,
+      required this.members,
+      required this.meetups,
+      required this.ownerUid,
+      this.summary = const RoomSummary(),
+      this.mapPlaces = const []});
   final Room room;
   final List<RoomMember> members;
   final List<RoomMeetup> meetups;
+  final String ownerUid;
+  final RoomSummary summary;
+  final List<PlaceVisit> mapPlaces;
+}
+
+class RoomSummary {
+  const RoomSummary(
+      {this.completedMeetupCount = 0,
+      this.uniquePlaceCount = 0,
+      this.mostVisitedPlace});
+  final int completedMeetupCount;
+  final int uniquePlaceCount;
+  final PlaceVisit? mostVisitedPlace;
+}
+
+class PlaceVisit {
+  const PlaceVisit(
+      {required this.place, required this.count, required this.meetupIds});
+  final Location place;
+  final int count;
+  final List<String> meetupIds;
 }
 
 class RoomMember {
@@ -277,9 +437,98 @@ class RoomMeetup {
       {required this.id,
       required this.title,
       required this.status,
-      this.confirmedDateTime});
+      this.confirmedDateTime,
+      this.completedAt,
+      this.meetingPlace,
+      this.occurrence});
   final String id;
   final String title;
   final String status;
   final DateTime? confirmedDateTime;
+  final DateTime? completedAt;
+  final Location? meetingPlace;
+  final int? occurrence;
+}
+
+class DashboardSummary {
+  const DashboardSummary(
+      {required this.upcomingMeetupCount,
+      required this.completedMeetupCount,
+      required this.friendCount,
+      required this.groupCount});
+  final int upcomingMeetupCount;
+  final int completedMeetupCount;
+  final int friendCount;
+  final int groupCount;
+}
+
+class DashboardMeetup {
+  const DashboardMeetup(
+      {required this.id,
+      required this.title,
+      required this.status,
+      required this.candidateDateTimes,
+      required this.isOwner,
+      this.confirmedDateTime,
+      this.completedAt,
+      this.meetingPlace,
+      this.roomId,
+      this.roomName});
+  final String id;
+  final String title;
+  final String status;
+  final List<DateTime> candidateDateTimes;
+  final bool isOwner;
+  final DateTime? confirmedDateTime;
+  final DateTime? completedAt;
+  final Location? meetingPlace;
+  final String? roomId;
+  final String? roomName;
+  DateTime? get displayDate =>
+      confirmedDateTime ??
+      (candidateDateTimes.isEmpty ? null : candidateDateTimes.first) ??
+      completedAt;
+  bool get isFinished => status == 'COMPLETED' || status == 'CANCELLED';
+}
+
+class DashboardRoom {
+  const DashboardRoom(
+      {required this.id,
+      required this.name,
+      required this.inviteCode,
+      required this.role,
+      required this.completedMeetupCount,
+      this.nextMeetupDate});
+  final String id;
+  final String name;
+  final String inviteCode;
+  final String role;
+  final int completedMeetupCount;
+  final DateTime? nextMeetupDate;
+}
+
+class HomeDashboard {
+  const HomeDashboard(
+      {required this.displayName,
+      required this.meetups,
+      required this.relationships,
+      required this.rooms,
+      required this.summary});
+  final String displayName;
+  final List<DashboardMeetup> meetups;
+  final List<RelationshipStat> relationships;
+  final List<DashboardRoom> rooms;
+  final DashboardSummary summary;
+}
+
+class FriendHistory {
+  const FriendHistory(
+      {required this.otherUid,
+      required this.displayName,
+      required this.completedMeetupCount,
+      required this.meetups});
+  final String otherUid;
+  final String displayName;
+  final int completedMeetupCount;
+  final List<DashboardMeetup> meetups;
 }
