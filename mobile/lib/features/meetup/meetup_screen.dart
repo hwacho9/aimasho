@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../app/theme.dart';
 import '../../models/meetup.dart';
@@ -30,6 +33,19 @@ class MeetupScreen extends ConsumerWidget {
         final isHost = mine?.isHost ?? false;
         final recommendation = ref.watch(recommendationProvider(meetupId));
         final relationships = ref.watch(meetupRelationshipsProvider(meetupId));
+        CandidateSlot? confirmedSlot;
+        if (detail.meetup.confirmedDateTime != null) {
+          for (final slot in detail.candidateSlots) {
+            if (slot.startDateTime.toUtc() ==
+                detail.meetup.confirmedDateTime!.toUtc()) {
+              confirmedSlot = slot;
+              break;
+            }
+          }
+        }
+        final otherSlots = detail.candidateSlots
+            .where((slot) => slot.id != confirmedSlot?.id)
+            .toList();
         return Scaffold(
           appBar: AppBar(
               title: const Text('aimasho',
@@ -46,8 +62,13 @@ class MeetupScreen extends ConsumerWidget {
                   _Header(
                       detail: detail,
                       relationships: relationships.valueOrNull ?? const []),
-                  if (isHost && !detail.meetup.isConfirmed)
-                    _InviteHint(meetupId: meetupId),
+                  if (detail.meetup.previousConfirmedDateTime != null &&
+                      detail.meetup.confirmedDateTime != null)
+                    _ScheduleChangedNotice(
+                        previous: detail.meetup.previousConfirmedDateTime!,
+                        current: detail.meetup.confirmedDateTime!),
+                  if (!detail.meetup.isFinished)
+                    _InviteHint(meetupId: meetupId, title: detail.meetup.title),
                   const SizedBox(height: 25),
                   Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -78,14 +99,57 @@ class MeetupScreen extends ConsumerWidget {
                                 color: AimashoColors.muted, fontSize: 12))
                       ]),
                   const SizedBox(height: 12),
-                  ...detail.candidateSlots.map((slot) => _ScheduleCard(
-                      meetupId: meetupId,
-                      detail: detail,
-                      slot: slot,
-                      uid: uid,
-                      recommendation: recommendation.valueOrNull,
-                      onChanged: () =>
-                          ref.invalidate(recommendationProvider(meetupId)))),
+                  if (confirmedSlot != null)
+                    _ScheduleCard(
+                        meetupId: meetupId,
+                        detail: detail,
+                        slot: confirmedSlot,
+                        uid: uid,
+                        recommendation: recommendation.valueOrNull,
+                        onChanged: () =>
+                            ref.invalidate(recommendationProvider(meetupId)))
+                  else
+                    ...detail.candidateSlots.map((slot) => _ScheduleCard(
+                        meetupId: meetupId,
+                        detail: detail,
+                        slot: slot,
+                        uid: uid,
+                        recommendation: recommendation.valueOrNull,
+                        onChanged: () =>
+                            ref.invalidate(recommendationProvider(meetupId)))),
+                  if (detail.meetup.isConfirmed && otherSlots.isNotEmpty)
+                    Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                            border: Border.all(color: AimashoColors.line),
+                            borderRadius: BorderRadius.circular(16)),
+                        child: ExpansionTile(
+                            title: const Text('투표 결과와 다른 후보',
+                                style: TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.w800)),
+                            subtitle: Text(
+                                '${otherSlots.length}개 · 언제든 내 선택 수정',
+                                style: const TextStyle(fontSize: 11)),
+                            childrenPadding: const EdgeInsets.all(10),
+                            children: otherSlots
+                                .map((slot) => _ScheduleCard(
+                                    meetupId: meetupId,
+                                    detail: detail,
+                                    slot: slot,
+                                    uid: uid,
+                                    recommendation: recommendation.valueOrNull,
+                                    onChanged: () => ref.invalidate(
+                                        recommendationProvider(meetupId))))
+                                .toList())),
+                  if (!detail.meetup.isFinished &&
+                      (isHost || detail.meetup.allowParticipantSlotAdd))
+                    _AddCandidateSlotCard(meetupId: meetupId),
+                  if (detail.meetup.isConfirmed && mine != null)
+                    _ConfirmedScheduleAvailabilityCard(
+                        meetupId: meetupId,
+                        availability: mine.confirmedScheduleAvailability,
+                        changed:
+                            detail.meetup.previousConfirmedDateTime != null),
                   if (isHost &&
                       detail.meetup.isConfirmed &&
                       detail.meetup.confirmedDateTime != null)
@@ -100,11 +164,24 @@ class MeetupScreen extends ConsumerWidget {
                         meetupId: meetupId,
                         recommended: recommendation.value!.recommended!,
                         busy: false),
+                  if (detail.meetup.contentVoteConfig.isEnabled)
+                    _ContentVotingPanel(
+                        meetupId: meetupId,
+                        detail: detail,
+                        uid: uid,
+                        isHost: isHost),
+                  _EventPlanPanel(
+                      meetupId: meetupId,
+                      detail: detail,
+                      uid: uid,
+                      canEdit: isHost || detail.meetup.allowPlanEditing),
                   MeetupLifecycle(
                       meetupId: meetupId,
                       detail: detail,
                       currentUid: uid,
                       isHost: isHost),
+                  if (isHost)
+                    _MeetupManagementPanel(meetupId: meetupId, detail: detail),
                 ]),
           ),
         );
@@ -218,8 +295,11 @@ String _relationshipLabel(int sharedMeetupCount) {
 }
 
 class _InviteHint extends StatelessWidget {
-  const _InviteHint({required this.meetupId});
+  const _InviteHint({required this.meetupId, required this.title});
   final String meetupId;
+  final String title;
+  String get _url => 'https://aimasho.web.app/m/$meetupId';
+
   @override
   Widget build(BuildContext context) => Container(
       margin: const EdgeInsets.only(top: 22),
@@ -231,14 +311,34 @@ class _InviteHint extends StatelessWidget {
         const Text('✦  친구를 초대해주세요',
             style: TextStyle(fontWeight: FontWeight.w800)),
         const SizedBox(height: 6),
-        const Text('공유 링크를 열면 로그인 없이 바로 투표할 수 있어요.',
+        const Text('공유 링크를 열면 로그인 없이 바로 참여하고 투표할 수 있어요.',
             style: TextStyle(fontSize: 12, color: AimashoColors.muted)),
         const SizedBox(height: 10),
-        SelectableText('https://aimasho.app/m/$meetupId',
+        SelectableText(_url,
             style: const TextStyle(
                 fontSize: 12,
                 color: AimashoColors.coral,
-                fontWeight: FontWeight.w700))
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+              child: OutlinedButton.icon(
+                  onPressed: () => Share.share('$title 약속에 초대해요!\n$_url',
+                      subject: '$title · aimasho 약속 초대'),
+                  icon: const Icon(Icons.ios_share_rounded, size: 17),
+                  label: const Text('초대 보내기'))),
+          const SizedBox(width: 8),
+          IconButton.outlined(
+              tooltip: '링크 복사',
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: _url));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('초대 링크를 복사했어요.')));
+                }
+              },
+              icon: const Icon(Icons.link_rounded))
+        ])
       ]));
 }
 
@@ -247,6 +347,97 @@ Participant? _participantFor(List<Participant> participants, String? uid) {
     if (participant.uid == uid) return participant;
   }
   return null;
+}
+
+class _ScheduleChangedNotice extends StatelessWidget {
+  const _ScheduleChangedNotice({required this.previous, required this.current});
+  final DateTime previous;
+  final DateTime current;
+
+  @override
+  Widget build(BuildContext context) => Container(
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFFF0E8),
+          border: Border.all(color: const Color(0xFFF0C7B5)),
+          borderRadius: BorderRadius.circular(18)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('SCHEDULE CHANGED',
+            style: TextStyle(
+                color: AimashoColors.coral,
+                fontSize: 11,
+                letterSpacing: 1.1,
+                fontWeight: FontWeight.w800)),
+        const SizedBox(height: 5),
+        const Text('집합 시간이 변경되었어요',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 5),
+        Text(
+            '${MeetupScreen._dateFormat.format(previous)}  →  ${MeetupScreen._dateFormat.format(current)}',
+            style: const TextStyle(fontSize: 12, color: AimashoColors.muted))
+      ]));
+}
+
+class _ConfirmedScheduleAvailabilityCard extends ConsumerStatefulWidget {
+  const _ConfirmedScheduleAvailabilityCard(
+      {required this.meetupId,
+      required this.availability,
+      required this.changed});
+  final String meetupId;
+  final VoteStatus? availability;
+  final bool changed;
+
+  @override
+  ConsumerState<_ConfirmedScheduleAvailabilityCard> createState() =>
+      _ConfirmedScheduleAvailabilityCardState();
+}
+
+class _ConfirmedScheduleAvailabilityCardState
+    extends ConsumerState<_ConfirmedScheduleAvailabilityCard> {
+  bool _saving = false;
+
+  Future<void> _update(VoteStatus status) async {
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(meetupRepositoryProvider)
+          .updateConfirmedScheduleAvailability(widget.meetupId, status);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('내 참석 가능 여부를 저장하지 못했어요. 다시 시도해 주세요.')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFFFEFB),
+          border: Border.all(color: AimashoColors.line),
+          borderRadius: BorderRadius.circular(18)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('MY RESPONSE',
+            style: TextStyle(
+                color: AimashoColors.coral,
+                fontSize: 11,
+                letterSpacing: 1.1,
+                fontWeight: FontWeight.w800)),
+        const SizedBox(height: 5),
+        Text(widget.changed ? '변경된 일정에 참여할 수 있나요?' : '이 일정에 참여할 수 있나요?',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        const Text('언제든 내 응답을 다시 선택할 수 있어요.',
+            style: TextStyle(fontSize: 12, color: AimashoColors.muted)),
+        const SizedBox(height: 12),
+        _VoteSelector(
+            value: widget.availability, saving: _saving, onSelect: _update)
+      ]));
 }
 
 class _ScheduleCard extends ConsumerStatefulWidget {
@@ -401,7 +592,7 @@ class _ScheduleCardState extends ConsumerState<_ScheduleCard> {
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700)));
                   }).toList())),
-        if (!widget.detail.meetup.isConfirmed && widget.uid != null)
+        if (!widget.detail.meetup.isFinished && widget.uid != null)
           Padding(
               padding: const EdgeInsets.only(top: 14),
               child: _VoteSelector(
@@ -409,6 +600,549 @@ class _ScheduleCardState extends ConsumerState<_ScheduleCard> {
       ]),
     );
   }
+}
+
+class _AddCandidateSlotCard extends ConsumerStatefulWidget {
+  const _AddCandidateSlotCard({required this.meetupId});
+  final String meetupId;
+  @override
+  ConsumerState<_AddCandidateSlotCard> createState() =>
+      _AddCandidateSlotCardState();
+}
+
+class _AddCandidateSlotCardState extends ConsumerState<_AddCandidateSlotCard> {
+  bool _saving = false;
+
+  Future<void> _add() async {
+    final initial = DateTime.now().add(const Duration(days: 1));
+    final date = await showDatePicker(
+        context: context,
+        initialDate: initial,
+        firstDate: DateTime.now(),
+        lastDate: DateTime.now().add(const Duration(days: 730)));
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+        context: context, initialTime: const TimeOfDay(hour: 19, minute: 0));
+    if (time == null || !mounted) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(meetupRepositoryProvider).addCandidateSlot(widget.meetupId,
+          DateTime(date.year, date.month, date.day, time.hour, time.minute));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('날짜 후보를 추가하지 못했어요: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: OutlinedButton.icon(
+          onPressed: _saving ? null : _add,
+          icon: const Icon(Icons.add_rounded),
+          label: Text(_saving ? '추가 중...' : '다른 날짜 후보 추가')));
+}
+
+class _ContentVotingPanel extends ConsumerStatefulWidget {
+  const _ContentVotingPanel(
+      {required this.meetupId,
+      required this.detail,
+      required this.uid,
+      required this.isHost});
+  final String meetupId;
+  final MeetupDetail detail;
+  final String? uid;
+  final bool isHost;
+  @override
+  ConsumerState<_ContentVotingPanel> createState() =>
+      _ContentVotingPanelState();
+}
+
+class _ContentVotingPanelState extends ConsumerState<_ContentVotingPanel> {
+  bool _saving = false;
+
+  Future<void> _toggle(ContentOption option, bool selected) async {
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(meetupRepositoryProvider)
+          .toggleContentVote(widget.meetupId, option.id, selected);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('선택을 저장하지 못했어요: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _addOption(ContentCategory category) async {
+    final controller = TextEditingController();
+    final label = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: Text('${category.label} 선택지 추가'),
+                content: TextField(
+                    controller: controller,
+                    autofocus: true,
+                    maxLength: 60,
+                    decoration: const InputDecoration(hintText: '예: 스시')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('취소')),
+                  FilledButton(
+                      onPressed: () =>
+                          Navigator.pop(context, controller.text.trim()),
+                      child: const Text('추가'))
+                ]));
+    controller.dispose();
+    if (label == null || label.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(meetupRepositoryProvider)
+          .addContentOption(widget.meetupId, category, label);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('선택지를 추가하지 못했어요: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = widget.detail.meetup.contentVoteConfig;
+    final categories = [
+      if (config.food) ContentCategory.food,
+      if (config.activity) ContentCategory.activity
+    ];
+    final names = {
+      for (final participant in widget.detail.participants)
+        participant.uid: participant.displayName
+    };
+    return Container(
+        margin: const EdgeInsets.only(top: 24),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+            color: const Color(0xFFFFFEFB),
+            border: Border.all(color: AimashoColors.line),
+            borderRadius: BorderRadius.circular(22)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('WHAT',
+              style: TextStyle(
+                  color: AimashoColors.coral,
+                  fontSize: 11,
+                  letterSpacing: 1.2,
+                  fontWeight: FontWeight.w800)),
+          const SizedBox(height: 5),
+          const Text('무엇을 할까요?',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text(config.allowMultiple ? '여러 개를 선택할 수 있어요.' : '카테고리마다 하나를 선택해요.',
+              style: const TextStyle(color: AimashoColors.muted, fontSize: 12)),
+          for (final category in categories) ...[
+            const SizedBox(height: 18),
+            Row(children: [
+              Expanded(
+                  child: Text(category.label,
+                      style: const TextStyle(fontWeight: FontWeight.w800))),
+              if (widget.isHost || config.allowParticipantOptions)
+                TextButton.icon(
+                    onPressed: _saving ? null : () => _addOption(category),
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('선택지'))
+            ]),
+            ...widget.detail.contentOptions
+                .where((option) => option.category == category)
+                .map((option) {
+              final votes = widget.detail.contentVotes
+                  .where((vote) => vote.optionId == option.id)
+                  .toList();
+              final selected =
+                  votes.any((vote) => vote.participantUid == widget.uid);
+              return CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: selected,
+                  onChanged: _saving || widget.detail.meetup.isFinished
+                      ? null
+                      : (value) => _toggle(option, value ?? false),
+                  title: Text(option.label,
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  subtitle: votes.isEmpty
+                      ? const Text('아직 선택한 사람이 없어요.')
+                      : Text(votes
+                          .map((vote) => names[vote.participantUid] ?? '알 수 없음')
+                          .join(' · ')),
+                  secondary: Text('${votes.length}표',
+                      style: const TextStyle(
+                          color: AimashoColors.coral,
+                          fontWeight: FontWeight.w800)));
+            })
+          ]
+        ]));
+  }
+}
+
+class _EventPlanPanel extends ConsumerStatefulWidget {
+  const _EventPlanPanel(
+      {required this.meetupId,
+      required this.detail,
+      required this.uid,
+      required this.canEdit});
+  final String meetupId;
+  final MeetupDetail detail;
+  final String? uid;
+  final bool canEdit;
+  @override
+  ConsumerState<_EventPlanPanel> createState() => _EventPlanPanelState();
+}
+
+class _EventPlanPanelState extends ConsumerState<_EventPlanPanel> {
+  bool _saving = false;
+
+  Future<void> _edit([PlanItem? existing]) async {
+    final title = TextEditingController(text: existing?.title ?? '');
+    final note = TextEditingController(text: existing?.note ?? '');
+    var type = existing?.type ?? PlanItemType.activity;
+    var time = existing?.scheduledAt == null
+        ? null
+        : TimeOfDay.fromDateTime(existing!.scheduledAt!);
+    final submitted = await showDialog<bool>(
+        context: context,
+        builder: (context) =>
+            StatefulBuilder(builder: (context, setDialogState) {
+              return AlertDialog(
+                  title: Text(existing == null ? '타임라인 추가' : '타임라인 수정'),
+                  content: SingleChildScrollView(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    DropdownButtonFormField<PlanItemType>(
+                        value: type,
+                        items: PlanItemType.values
+                            .map((item) => DropdownMenuItem(
+                                value: item,
+                                child: Text('${item.emoji} ${item.label}')))
+                            .toList(),
+                        onChanged: (value) =>
+                            setDialogState(() => type = value!)),
+                    const SizedBox(height: 10),
+                    TextField(
+                        controller: title,
+                        maxLength: 120,
+                        decoration: const InputDecoration(hintText: '할 일 이름')),
+                    TextField(
+                        controller: note,
+                        maxLength: 500,
+                        maxLines: 2,
+                        decoration: const InputDecoration(hintText: '메모 (선택)')),
+                    if (widget.detail.meetup.confirmedDateTime != null)
+                      OutlinedButton.icon(
+                          onPressed: () async {
+                            final picked = await showTimePicker(
+                                context: context,
+                                initialTime: time ??
+                                    TimeOfDay.fromDateTime(widget
+                                        .detail.meetup.confirmedDateTime!));
+                            if (picked != null) {
+                              setDialogState(() => time = picked);
+                            }
+                          },
+                          icon: const Icon(Icons.schedule_rounded),
+                          label: Text(time == null
+                              ? '시간만 등록 (선택)'
+                              : time!.format(context)))
+                  ])),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('취소')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('저장'))
+                  ]);
+            }));
+    if (submitted != true || title.text.trim().isEmpty) {
+      title.dispose();
+      note.dispose();
+      return;
+    }
+    DateTime? scheduledAt;
+    final date = widget.detail.meetup.confirmedDateTime;
+    if (date != null && time != null) {
+      scheduledAt =
+          DateTime(date.year, date.month, date.day, time!.hour, time!.minute);
+    }
+    setState(() => _saving = true);
+    try {
+      final repository = ref.read(meetupRepositoryProvider);
+      if (existing == null) {
+        await repository.createPlanItem(widget.meetupId,
+            type: type,
+            title: title.text.trim(),
+            scheduledAt: scheduledAt,
+            note: note.text.trim());
+      } else {
+        await repository.updatePlanItem(widget.meetupId, existing.id,
+            type: type,
+            title: title.text.trim(),
+            scheduledAt: scheduledAt,
+            place: existing.place,
+            note: note.text.trim());
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('타임라인을 저장하지 못했어요: $error')));
+      }
+    } finally {
+      title.dispose();
+      note.dispose();
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _status(PlanItem item, PlanItemStatus status) async {
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(meetupRepositoryProvider)
+          .setPlanItemStatus(widget.meetupId, item.id, status);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _delete(PlanItem item) async {
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(meetupRepositoryProvider)
+          .deletePlanItem(widget.meetupId, item.id);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _move(int index, int offset) async {
+    final items = [...widget.detail.planItems];
+    final target = index + offset;
+    if (target < 0 || target >= items.length) return;
+    final item = items.removeAt(index);
+    items.insert(target, item);
+    setState(() => _saving = true);
+    try {
+      await ref.read(meetupRepositoryProvider).reorderPlanItems(
+          widget.meetupId, items.map((item) => item.id).toList());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+      margin: const EdgeInsets.only(top: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFFFEFB),
+          border: Border.all(color: AimashoColors.line),
+          borderRadius: BorderRadius.circular(22)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('TIMELINE',
+            style: TextStyle(
+                color: AimashoColors.coral,
+                fontSize: 11,
+                letterSpacing: 1.2,
+                fontWeight: FontWeight.w800)),
+        const SizedBox(height: 5),
+        Row(children: [
+          const Expanded(
+              child: Text('우리의 하루',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800))),
+          if (widget.canEdit && !widget.detail.meetup.isFinished)
+            TextButton.icon(
+                onPressed: _saving ? null : () => _edit(),
+                icon: const Icon(Icons.add, size: 17),
+                label: const Text('할 일'))
+        ]),
+        if (widget.detail.planItems.isEmpty)
+          const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Text('식사, 활동, 이동 같은 할 일을 시간 순서로 추가해보세요.',
+                  style: TextStyle(
+                      color: AimashoColors.muted, fontSize: 12, height: 1.5)))
+        else
+          ...widget.detail.planItems.asMap().entries.map((entry) {
+            final item = entry.value;
+            final completed = item.status == PlanItemStatus.completed;
+            return Container(
+                margin: const EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                    color: completed
+                        ? const Color(0xFFEAF8EF)
+                        : const Color(0xFFFFF6EF),
+                    borderRadius: BorderRadius.circular(15)),
+                child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(item.type.emoji,
+                          style: const TextStyle(fontSize: 22)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                            Text(item.title,
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    decoration: completed
+                                        ? TextDecoration.lineThrough
+                                        : null)),
+                            if (item.scheduledAt != null)
+                              Text(
+                                  DateFormat('HH:mm').format(item.scheduledAt!),
+                                  style: const TextStyle(
+                                      color: AimashoColors.coral,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800)),
+                            if (item.note?.isNotEmpty == true)
+                              Text(item.note!,
+                                  style: const TextStyle(
+                                      color: AimashoColors.muted, fontSize: 11))
+                          ])),
+                      PopupMenuButton<String>(
+                          enabled: !_saving,
+                          onSelected: (action) {
+                            if (action == 'done') {
+                              _status(
+                                  item,
+                                  completed
+                                      ? PlanItemStatus.planned
+                                      : PlanItemStatus.completed);
+                            } else if (action == 'edit') {
+                              _edit(item);
+                            } else if (action == 'delete') {
+                              _delete(item);
+                            } else if (action == 'up') {
+                              _move(entry.key, -1);
+                            } else if (action == 'down') {
+                              _move(entry.key, 1);
+                            }
+                          },
+                          itemBuilder: (context) => [
+                                PopupMenuItem(
+                                    value: 'done',
+                                    child: Text(completed ? '완료 취소' : '완료 표시')),
+                                if (widget.canEdit &&
+                                    !widget.detail.meetup.isFinished)
+                                  const PopupMenuItem(
+                                      value: 'edit', child: Text('수정')),
+                                if (widget.canEdit && entry.key > 0)
+                                  const PopupMenuItem(
+                                      value: 'up', child: Text('위로 이동')),
+                                if (widget.canEdit &&
+                                    entry.key <
+                                        widget.detail.planItems.length - 1)
+                                  const PopupMenuItem(
+                                      value: 'down', child: Text('아래로 이동')),
+                                if (widget.canEdit &&
+                                    !widget.detail.meetup.isFinished)
+                                  const PopupMenuItem(
+                                      value: 'delete', child: Text('삭제'))
+                              ])
+                    ]));
+          })
+      ]));
+}
+
+class _MeetupManagementPanel extends ConsumerStatefulWidget {
+  const _MeetupManagementPanel({required this.meetupId, required this.detail});
+  final String meetupId;
+  final MeetupDetail detail;
+  @override
+  ConsumerState<_MeetupManagementPanel> createState() =>
+      _MeetupManagementPanelState();
+}
+
+class _MeetupManagementPanelState
+    extends ConsumerState<_MeetupManagementPanel> {
+  bool _busy = false;
+
+  Future<void> _run(String action) async {
+    final labels = {
+      'complete': '이 약속을 완료하고 기록으로 남길까요?',
+      'cancel': '이 약속을 취소할까요?',
+      'delete': '이 약속과 모든 투표·정산을 완전히 삭제할까요?'
+    };
+    final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) =>
+                AlertDialog(title: Text(labels[action]!), actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('아니요')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('확인'))
+                ])) ??
+        false;
+    if (!confirmed) return;
+    setState(() => _busy = true);
+    try {
+      final repository = ref.read(meetupRepositoryProvider);
+      if (action == 'complete') {
+        await repository.completeMeetup(widget.meetupId);
+      } else if (action == 'cancel') {
+        await repository.cancelMeetup(widget.meetupId);
+      } else {
+        await repository.deleteMeetup(widget.meetupId);
+        ref.invalidate(dashboardProvider);
+        if (mounted) context.go('/');
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('처리하지 못했어요: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+      margin: const EdgeInsets.only(top: 24),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFF0B5A6)),
+          borderRadius: BorderRadius.circular(18)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('약속 관리',
+            style: TextStyle(
+                color: AimashoColors.coral, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 10),
+        if (!widget.detail.meetup.isFinished &&
+            widget.detail.meetup.isConfirmed)
+          OutlinedButton(
+              onPressed: _busy ? null : () => _run('complete'),
+              child: const Text('약속 완료')),
+        if (!widget.detail.meetup.isFinished)
+          OutlinedButton(
+              onPressed: _busy ? null : () => _run('cancel'),
+              child: const Text('약속 취소')),
+        TextButton(
+            onPressed: _busy ? null : () => _run('delete'),
+            child: const Text('약속 삭제'))
+      ]));
 }
 
 class _ScheduleChangeCard extends ConsumerStatefulWidget {
@@ -443,8 +1177,8 @@ class _ScheduleChangeCardState extends ConsumerState<_ScheduleChangeCard> {
           .read(meetupRepositoryProvider)
           .updateConfirmedSchedule(widget.meetupId, next);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('집합 시간을 변경했어요. 출발 경로를 다시 계산해 주세요.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('집합 날짜와 시간을 변경했어요.')));
       }
     } catch (error) {
       if (mounted) {
@@ -475,7 +1209,7 @@ class _ScheduleChangeCardState extends ConsumerState<_ScheduleChangeCard> {
         const Text('집합 날짜·시간 변경',
             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
         const SizedBox(height: 5),
-        const Text('변경 후 출발 경로와 알림은 새 시간 기준으로 다시 계산해 주세요.',
+        const Text('출발·도착 시간 계산과 출발 알림은 현재 비활성화되어 있어요.',
             style: TextStyle(color: AimashoColors.muted, fontSize: 12)),
         const SizedBox(height: 13),
         OutlinedButton.icon(

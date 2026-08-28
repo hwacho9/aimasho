@@ -19,12 +19,32 @@ class _CreateMeetupScreenState extends ConsumerState<CreateMeetupScreen> {
   final _description = TextEditingController();
   int _duration = 120;
   bool _saving = false;
-  final List<DateTime> _slots = [
-    DateTime(2026, 8, 21, 19),
-    DateTime(2026, 8, 22, 18),
-    DateTime(2026, 8, 22, 19),
-    DateTime(2026, 8, 23, 18)
-  ];
+  late final List<DateTime> _slots;
+  bool _collectOrigins = true;
+  bool _allowParticipantSlotAdd = false;
+  bool _foodVoting = false;
+  bool _activityVoting = false;
+  bool _allowMultipleContentVotes = false;
+  bool _allowParticipantContentOptions = true;
+  bool _allowPlanEditing = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final tomorrow = DateTime.now().add(const Duration(days: 1));
+    _slots = List.generate(
+        4,
+        (index) => DateTime(tomorrow.year, tomorrow.month, tomorrow.day + index,
+            index.isEven ? 19 : 18));
+    _prefillName();
+  }
+
+  Future<void> _prefillName() async {
+    final user = await ref.read(meetupRepositoryProvider).ensureAnonymousUser();
+    if (mounted && _name.text.isEmpty && user.displayName?.isNotEmpty == true) {
+      _name.text = user.displayName!;
+    }
+  }
 
   @override
   void dispose() {
@@ -59,7 +79,14 @@ class _CreateMeetupScreenState extends ConsumerState<CreateMeetupScreen> {
           description: _description.text.trim(),
           durationMinutes: _duration,
           candidateSlots: _slots,
-          roomId: widget.roomId);
+          roomId: widget.roomId,
+          collectOrigins: _collectOrigins,
+          allowParticipantSlotAdd: _allowParticipantSlotAdd,
+          foodVoting: _foodVoting,
+          activityVoting: _activityVoting,
+          allowMultipleContentVotes: _allowMultipleContentVotes,
+          allowParticipantContentOptions: _allowParticipantContentOptions,
+          allowPlanEditing: _allowPlanEditing);
       if (mounted) context.go('/m/$meetupId/plan');
     } catch (error) {
       if (mounted) {
@@ -158,6 +185,63 @@ class _CreateMeetupScreenState extends ConsumerState<CreateMeetupScreen> {
                             .add(_slots.last.add(const Duration(days: 1)))),
                         icon: const Icon(Icons.add),
                         label: const Text('후보 추가')),
+                  const SizedBox(height: 24),
+                  ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      childrenPadding: EdgeInsets.zero,
+                      title: const Text('약속 옵션',
+                          style: TextStyle(fontWeight: FontWeight.w800)),
+                      subtitle: const Text('친구 제안, 콘텐츠 투표, 타임라인 설정',
+                          style: TextStyle(
+                              fontSize: 11, color: AimashoColors.muted)),
+                      children: [
+                        SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('출발지 모으기'),
+                            subtitle: const Text('중간 장소를 함께 정할 때 사용해요.'),
+                            value: _collectOrigins,
+                            onChanged: (value) =>
+                                setState(() => _collectOrigins = value)),
+                        SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('참가자도 날짜 후보 추가'),
+                            value: _allowParticipantSlotAdd,
+                            onChanged: (value) => setState(
+                                () => _allowParticipantSlotAdd = value)),
+                        SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('먹고 싶은 것 투표'),
+                            value: _foodVoting,
+                            onChanged: (value) =>
+                                setState(() => _foodVoting = value)),
+                        SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('하고 싶은 것 투표'),
+                            value: _activityVoting,
+                            onChanged: (value) =>
+                                setState(() => _activityVoting = value)),
+                        if (_foodVoting || _activityVoting) ...[
+                          SwitchListTile.adaptive(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('복수 선택 허용'),
+                              value: _allowMultipleContentVotes,
+                              onChanged: (value) => setState(
+                                  () => _allowMultipleContentVotes = value)),
+                          SwitchListTile.adaptive(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('참가자도 선택지 추가'),
+                              value: _allowParticipantContentOptions,
+                              onChanged: (value) => setState(() =>
+                                  _allowParticipantContentOptions = value)),
+                        ],
+                        SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('모두 타임라인 편집'),
+                            subtitle: const Text('할 일과 방문 순서를 함께 정해요.'),
+                            value: _allowPlanEditing,
+                            onChanged: (value) =>
+                                setState(() => _allowPlanEditing = value)),
+                      ]),
                   const SizedBox(height: 18),
                   ElevatedButton(
                       onPressed: _saving ? null : _submit,
