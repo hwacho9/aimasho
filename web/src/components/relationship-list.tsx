@@ -1,21 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { relationshipLabel } from "@/lib/relationship-label";
-import { getFriendHistory, getMyRelationships } from "@/services/meetup-repository";
+import { getFriendHistory } from "@/services/meetup-repository";
 import type { FriendHistory, RelationshipStat } from "@/types/meetup";
 import { useLanguage } from "./language-provider";
 
-export function RelationshipList() {
+export function RelationshipList({ relationships }: { relationships?: RelationshipStat[] }) {
   const { language } = useLanguage();
   const korean = language === "ko";
-  const [relationships, setRelationships] = useState<RelationshipStat[]>();
   const [history, setHistory] = useState<FriendHistory>();
   const [historyError, setHistoryError] = useState<string>();
-
-  useEffect(() => {
-    void getMyRelationships().then(setRelationships).catch(() => setRelationships([]));
-  }, []);
 
   const select = async (relationship: RelationshipStat) => { setHistory(undefined); setHistoryError(undefined); try { setHistory(await getFriendHistory(relationship.otherUid)); } catch (caught) { setHistoryError(caught instanceof Error ? caught.message : korean ? "함께한 기록을 불러오지 못했어요." : "一緒の記録を読み込めませんでした。"); } };
   const date = (value?: string) => value ? new Intl.DateTimeFormat(korean ? "ko-KR" : "ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "short", day: "numeric" }).format(new Date(value)) : korean ? "날짜 미정" : "日時未定";

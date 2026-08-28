@@ -9,6 +9,7 @@ import { relationshipLabel } from "@/lib/relationship-label";
 import { rankSchedule } from "@/lib/schedule-ranking";
 import type { AvailabilityVote, MeetupDetail, RelationshipStat, VoteStatus } from "@/types/meetup";
 import { VoteButtonGroup } from "./vote-button";
+import { GoogleSignInButton } from "./google-sign-in-button";
 import { ShareCard } from "./share-card";
 import { MeetupNextSteps } from "./meetup-next-steps";
 import { useLanguage } from "./language-provider";
@@ -220,7 +221,7 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
     <ContentVotingPanel meetupId={meetupId} detail={detail} currentUid={uid} />
     <MeetupNextSteps meetupId={meetupId} detail={detail} currentUid={uid} isHost={isHost} />
     <EventPlanPanel meetupId={meetupId} detail={detail} isHost={isHost} />
-    {isAnonymous && <section className="account-card"><div><p className="eyebrow">{korean ? "약속을 계속 저장하기" : "予定を保存しよう"}</p><h2>{korean ? "다음 약속도 aimasho에서?" : "次の予定もaimashoで？"}</h2><p>{korean ? "계정을 만들면 이번 약속을 저장하고, 그룹으로 친구들과 더 쉽게 만날 수 있어요." : "アカウントを作るとこの予定を保存し、グループで友だちともっと気軽に会えます。"}</p></div><button className="secondary-button" onClick={() => void upgradeAccount()} disabled={accountBusy}>{accountBusy ? korean ? "연결 중..." : "連携中…" : korean ? "Google로 계속하기" : "Googleで続ける"}</button></section>}
+    {isAnonymous && <section className="account-card"><div><p className="eyebrow">{korean ? "약속을 계속 저장하기" : "予定を保存しよう"}</p><h2>{korean ? "다음 약속도 aimasho에서?" : "次の予定もaimashoで？"}</h2><p>{korean ? "계정을 만들면 이번 약속을 저장하고, 그룹으로 친구들과 더 쉽게 만날 수 있어요." : "アカウントを作るとこの予定を保存し、グループで友だちともっと気軽に会えます。"}</p></div><GoogleSignInButton onClick={() => void upgradeAccount()} busy={accountBusy} /></section>}
     {isHost && <section className="danger-zone"><div><p className="eyebrow">{korean ? "일정 관리" : "予定の管理"}</p><h2>{korean ? "이 일정 삭제" : "この予定を削除"}</h2><p>{korean ? "투표, 플랜, 정산을 포함한 일정 전체가 영구 삭제됩니다." : "投票、プラン、精算を含む予定全体が完全に削除されます。"}</p></div><button className="danger-button" type="button" onClick={() => void removeMeetup()} disabled={deleting}>{deleting ? korean ? "삭제 중..." : "削除中…" : korean ? "일정 삭제" : "予定を削除"}</button></section>}
     {error && <p className="error-message page-error" role="alert">{error}</p>}
   </main>;

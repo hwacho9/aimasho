@@ -8,6 +8,17 @@ import type { AvailabilityVote, CandidateSlot, ContentCategory, ContentOption, C
 
 const callable = <Input, Output>(name: string) => httpsCallable<Input, Output>(firebase().functions, name);
 
+const dashboardCacheTtlMs = 30_000;
+let dashboardCache: { uid: string; expiresAt: number; data: HomeDashboardData } | undefined;
+let dashboardRequest: { uid: string; promise: Promise<HomeDashboardData> } | undefined;
+let dashboardCacheVersion = 0;
+
+export function invalidateMyDashboardCache() {
+  dashboardCacheVersion += 1;
+  dashboardCache = undefined;
+  dashboardRequest = undefined;
+}
+
 function dateString(value: unknown): string | undefined {
   if (value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
     return value.toDate().toISOString();
@@ -33,6 +44,7 @@ export async function createMeetup(input: { hostName: string; title: string; des
     ...(trimmedDescription ? { description: trimmedDescription } : {}),
   };
   const response = await callable<typeof payload, { meetupId: string }>("createMeetup")(payload);
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("meetup_created");
   return response.data.meetupId;
 }
@@ -46,6 +58,7 @@ export async function getInvitePreview(meetupId: string) {
 export async function joinMeetup(meetupId: string, displayName: string) {
   await identify(displayName);
   await callable<{ meetupId: string; displayName: string }, { meetupId: string }>("joinMeetup")({ meetupId, displayName });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("meetup_joined");
 }
 
@@ -89,14 +102,17 @@ export async function setPlanItemStatus(meetupId: string, itemId: string, status
 }
 export async function completeMeetup(meetupId: string) {
   await callable<{ meetupId: string }, { status: string }>("completeMeetup")({ meetupId });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("meetup_completed");
 }
 export async function cancelMeetup(meetupId: string) {
   await callable<{ meetupId: string }, { status: string }>("cancelMeetup")({ meetupId });
+  invalidateMyDashboardCache();
 }
 
 export async function deleteMeetup(meetupId: string) {
   await callable<{ meetupId: string }, { meetupId: string }>("deleteMeetup")({ meetupId });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("meetup_deleted");
 }
 
@@ -108,11 +124,13 @@ export async function getRecommendation(meetupId: string): Promise<Recommendatio
 
 export async function confirmSchedule(meetupId: string, slotId: string) {
   await callable<{ meetupId: string; slotId: string }, { status: string }>("confirmSchedule")({ meetupId, slotId });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("schedule_confirmed");
 }
 
 export async function updateConfirmedSchedule(meetupId: string, confirmedDateTime: string) {
   await callable<{ meetupId: string; confirmedDateTime: string }, { status: string; confirmedDateTime: string; routesReset: number }>("updateConfirmedSchedule")({ meetupId, confirmedDateTime });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("schedule_updated");
 }
 
@@ -179,6 +197,7 @@ export async function getSettlement(meetupId: string): Promise<Settlement> {
 
 export async function saveProfile(displayName: string) {
   const response = await callable<{ displayName: string }, { uid: string; displayName: string; accountType: string }>("saveProfile")({ displayName });
+  invalidateMyDashboardCache();
   return response.data;
 }
 
@@ -203,12 +222,14 @@ export async function saveDefaultOrigin(defaultOrigin: Location) {
 
 export async function createRoom(name: string, displayName: string) {
   const response = await callable<{ name: string; displayName: string }, { roomId: string; inviteCode: string }>("createRoom")({ name, displayName });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("room_created");
   return response.data;
 }
 
 export async function deleteRoom(roomId: string) {
   const response = await callable<{ roomId: string }, { roomId: string; preservedMeetupCount: number }>("deleteRoom")({ roomId });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("room_deleted");
   return response.data;
 }
@@ -218,13 +239,29 @@ export async function getMyRooms(): Promise<Room[]> {
   return response.data.rooms;
 }
 
-export async function getMyDashboard(): Promise<HomeDashboardData> {
-  const response = await callable<Record<string, never>, HomeDashboardData>("getMyDashboard")({});
-  return response.data;
+export async function getMyDashboard({ force = false }: { force?: boolean } = {}): Promise<HomeDashboardData> {
+  const uid = firebase().auth.currentUser?.uid ?? "pending-auth";
+  if (!force && dashboardCache?.uid === uid && dashboardCache.expiresAt > Date.now()) return dashboardCache.data;
+  if (dashboardRequest?.uid === uid) return dashboardRequest.promise;
+
+  const requestVersion = dashboardCacheVersion;
+  const promise = callable<Record<string, never>, HomeDashboardData>("getMyDashboard")({}).then((response) => {
+    if (requestVersion === dashboardCacheVersion) {
+      dashboardCache = { uid, expiresAt: Date.now() + dashboardCacheTtlMs, data: response.data };
+    }
+    return response.data;
+  });
+  dashboardRequest = { uid, promise };
+  try {
+    return await promise;
+  } finally {
+    if (dashboardRequest?.promise === promise) dashboardRequest = undefined;
+  }
 }
 
 export async function joinRoom(inviteCode: string, displayName: string) {
   const response = await callable<{ inviteCode: string; displayName: string }, { roomId: string }>("joinRoom")({ inviteCode, displayName });
+  invalidateMyDashboardCache();
   trackAnalyticsEvent("room_joined");
   return response.data.roomId;
 }

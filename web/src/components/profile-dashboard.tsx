@@ -14,9 +14,10 @@ import {
   saveProfile,
   searchPlaces,
 } from "@/services/meetup-repository";
-import type { HistoryMeetup, Location, Room } from "@/types/meetup";
+import type { HistoryMeetup, Location, RelationshipStat, Room } from "@/types/meetup";
 import { useLanguage } from "./language-provider";
 import { RelationshipList } from "./relationship-list";
+import { GoogleSignInButton } from "./google-sign-in-button";
 
 function meetupDate(meetup: HistoryMeetup) {
   return meetup.confirmedDateTime ?? meetup.candidateDateTimes?.[0] ?? meetup.completedAt;
@@ -40,6 +41,7 @@ export function ProfileDashboard() {
   const [anonymous, setAnonymous] = useState(true);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [meetups, setMeetups] = useState<HistoryMeetup[]>([]);
+  const [relationships, setRelationships] = useState<RelationshipStat[]>();
   const [accountLoading, setAccountLoading] = useState(false);
   const [meetupLoadFailed, setMeetupLoadFailed] = useState(false);
   const [roomName, setRoomName] = useState("");
@@ -50,16 +52,18 @@ export function ProfileDashboard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  const loadAccountData = useCallback(async () => {
+  const loadAccountData = useCallback(async (force = false) => {
     setAccountLoading(true);
     setMeetupLoadFailed(false);
     try {
-      const dashboard = await getMyDashboard();
+      const dashboard = await getMyDashboard({ force });
       setMeetups(dashboard.meetups);
       setRooms(dashboard.rooms);
+      setRelationships(dashboard.relationships);
       setName((current) => current || dashboard.displayName);
     } catch {
       setMeetups([]);
+      setRelationships([]);
       setMeetupLoadFailed(true);
       // Keep group management available even if the combined dashboard read
       // fails because an older profile or a Firestore index is incomplete.
@@ -86,6 +90,7 @@ export function ProfileDashboard() {
       else {
         setMeetups([]);
         setRooms([]);
+        setRelationships([]);
         setAccountLoading(false);
       }
     });
@@ -115,7 +120,7 @@ export function ProfileDashboard() {
       const user = await continueWithGoogle();
       const profile = await saveProfile(user.displayName || name || "aimasho user");
       setName(profile.displayName);
-      await loadAccountData();
+      await loadAccountData(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : korean ? "Google 계정 연결을 완료하지 못했어요." : "Googleアカウントを連携できませんでした。");
     } finally {
@@ -130,7 +135,7 @@ export function ProfileDashboard() {
     try {
       await createRoom(roomName, name || "aimasho user");
       setRoomName("");
-      await loadAccountData();
+      await loadAccountData(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : korean ? "그룹을 만들지 못했어요." : "グループを作成できませんでした。");
     } finally {
@@ -187,7 +192,7 @@ export function ProfileDashboard() {
         <p>{korean ? "Google 계정 하나로 그룹 멤버, 다음 일정, 함께한 기록을 여러 기기에서 이어볼 수 있어요." : "Googleアカウントで、メンバー・次の予定・一緒に過ごした記録を複数の端末から確認できます。"}</p>
         <div className="group-login-benefits"><span>✓ {korean ? "그룹 만들기와 초대" : "グループ作成と招待"}</span><span>✓ {korean ? "초대 코드로 참여" : "招待コードで参加"}</span></div>
       </div>
-      <button className="primary-button" onClick={() => void upgrade()} disabled={busy}>{busy ? korean ? "로그인 중..." : "ログイン中…" : korean ? "Google로 로그인 / 회원가입" : "Googleでログイン・新規登録"}</button>
+      <GoogleSignInButton onClick={() => void upgrade()} busy={busy} />
     </section> : <>
       <section className="profile-meetup-section">
         <div className="section-heading">
@@ -195,7 +200,7 @@ export function ProfileDashboard() {
           {!accountLoading && <span>{ownedMeetups.length}{korean ? "개" : "件"}</span>}
         </div>
         {accountLoading ? <div className="profile-meetup-loading"><span className="loader" /><p>{korean ? "내 약속을 불러오고 있어요..." : "予定を読み込んでいます…"}</p></div>
-          : meetupLoadFailed ? <div className="profile-meetup-empty"><p>{korean ? "약속 목록을 불러오지 못했어요." : "予定一覧を読み込めませんでした。"}</p><button className="text-button" type="button" onClick={() => void loadAccountData()}>{korean ? "다시 시도" : "再試行"}</button></div>
+          : meetupLoadFailed ? <div className="profile-meetup-empty"><p>{korean ? "약속 목록을 불러오지 못했어요." : "予定一覧を読み込めませんでした。"}</p><button className="text-button" type="button" onClick={() => void loadAccountData(true)}>{korean ? "다시 시도" : "再試行"}</button></div>
             : ownedMeetups.length === 0 ? <div className="profile-meetup-empty"><p>{korean ? "아직 만든 약속이 없어요. 링크로 초대할 첫 약속을 만들어보세요." : "作成した予定はまだありません。招待リンクを送る最初の予定を作りましょう。"}</p><Link className="secondary-button" href="/new">{korean ? "+ 약속 만들기" : "+ 予定を作る"}</Link></div>
               : <div className="profile-meetup-list">{ownedMeetups.map((meetup) => <Link href={`/m/${meetup.id}`} key={meetup.id}>
                 <span className={`profile-meetup-status ${meetup.status.toLowerCase()}`}>{meetupStatus(meetup, korean)}</span>
@@ -203,7 +208,7 @@ export function ProfileDashboard() {
                 <span className="profile-meetup-arrow" aria-hidden="true">→</span>
               </Link>)}</div>}
       </section>
-      <RelationshipList />
+      <RelationshipList relationships={relationships} />
       <section className="room-section">
         <p className="eyebrow">{korean ? "기본 출발지" : "既定の出発地"}</p><h2>{korean ? "기본 출발 위치" : "既定の出発地"}</h2>
         {defaultOrigin ? <p className="saved-location">✓ {defaultOrigin.name}</p> : <p className="empty-note">{korean ? "자주 출발하는 장소를 저장해두세요." : "よく出発する場所を保存しましょう。"}</p>}

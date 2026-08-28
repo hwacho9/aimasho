@@ -387,22 +387,27 @@ function timestampIso(value: unknown): string | null {
 
 async function historyMeetupPayload(snapshot: DocumentSnapshot): Promise<HistoryMeetupPayload> {
   const data = snapshot.data();
+  const confirmedDateTime = timestampIso(data?.confirmedDateTime);
+  const completedAt = timestampIso(data?.completedAt);
+  const status = data?.status as MeetupStatus;
   const [plans, candidateSlots] = await Promise.all([
-    snapshot.ref.collection("planItems").get(),
-    snapshot.ref.collection("candidateSlots").orderBy("startDateTime").get(),
+    status === "COMPLETED" ? snapshot.ref.collection("planItems").get() : Promise.resolve(null),
+    !confirmedDateTime && !completedAt
+      ? snapshot.ref.collection("candidateSlots").orderBy("startDateTime").limit(1).get()
+      : Promise.resolve(null),
   ]);
-  const planPlaces = plans.docs
+  const planPlaces = (plans?.docs ?? [])
     .filter((item) => item.data()?.status === "completed" && item.data()?.place)
     .map((item) => item.data().place as Location);
   return {
     id: snapshot.id,
     title: data?.title ?? "aimasho meetup",
-    status: data?.status as MeetupStatus,
-    confirmedDateTime: timestampIso(data?.confirmedDateTime),
-    completedAt: timestampIso(data?.completedAt),
+    status,
+    confirmedDateTime,
+    completedAt,
     meetingPlace: data?.meetingPlace ? data.meetingPlace as Location : null,
     planPlaces,
-    candidateDateTimes: candidateSlots.docs.flatMap((slot) => {
+    candidateDateTimes: (candidateSlots?.docs ?? []).flatMap((slot) => {
       const value = timestampIso(slot.data()?.startDateTime);
       return value ? [value] : [];
     }),
@@ -1414,10 +1419,14 @@ export const getMyDashboard = onCall(async (request) => {
     db.collection("meetups").where("createdByUid", "==", uid).limit(100).get(),
   ]);
   if (profile.data()?.accountType !== "REGISTERED") throw new HttpsError("failed-precondition", "Create an account to use the dashboard.");
-  const meetupSnapshots = await Promise.all(participationDocs.map((participation) => participation.ref.parent.parent?.get()));
+  const participantMeetupRefs = [...new Map(participationDocs.flatMap((participation) => {
+    const ref = participation.ref.parent.parent;
+    return ref ? [[ref.path, ref] as const] : [];
+  })).values()];
+  const meetupSnapshots = participantMeetupRefs.length > 0 ? await db.getAll(...participantMeetupRefs) : [];
   const uniqueMeetups = new Map<string, DocumentSnapshot>();
   ownedMeetups.docs.forEach((meetup) => uniqueMeetups.set(meetup.id, meetup));
-  meetupSnapshots.forEach((meetup) => { if (meetup?.exists) uniqueMeetups.set(meetup.id, meetup); });
+  meetupSnapshots.forEach((meetup) => { if (meetup.exists) uniqueMeetups.set(meetup.id, meetup); });
   const histories = await Promise.all([...uniqueMeetups.values()].map(async (snapshot): Promise<HistoryMeetupPayload> => {
     const data = snapshot.data();
     const confirmedDateTime = timestampIso(data?.confirmedDateTime);
@@ -1443,8 +1452,12 @@ export const getMyDashboard = onCall(async (request) => {
     };
   }));
 
-  const roomSnapshots = await Promise.all(membershipDocs.map((membership) => membership.ref.parent.parent?.get()));
-  const roomById = new Map(roomSnapshots.filter((room): room is DocumentSnapshot => Boolean(room?.exists)).map((room) => [room.id, room]));
+  const memberRoomRefs = [...new Map(membershipDocs.flatMap((membership) => {
+    const ref = membership.ref.parent.parent;
+    return ref ? [[ref.path, ref] as const] : [];
+  })).values()];
+  const roomSnapshots = memberRoomRefs.length > 0 ? await db.getAll(...memberRoomRefs) : [];
+  const roomById = new Map(roomSnapshots.filter((room) => room.exists).map((room) => [room.id, room]));
   const completedByRoom = new Map<string, number>();
   histories.filter((meetup) => meetup.status === "COMPLETED" && meetup.roomId).forEach((meetup) => completedByRoom.set(meetup.roomId!, (completedByRoom.get(meetup.roomId!) ?? 0) + 1));
   const nextByRoom = new Map<string, string>();
