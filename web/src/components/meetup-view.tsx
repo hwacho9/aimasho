@@ -7,23 +7,17 @@ import { addCandidateSlot, confirmSchedule, deleteMeetup, getMeetupRelationships
 import { continueWithGoogle, firebase } from "@/lib/firebase/client";
 import { relationshipLabel } from "@/lib/relationship-label";
 import { rankSchedule } from "@/lib/schedule-ranking";
-import type { AvailabilityVote, MeetupDetail, RelationshipStat, VoteStatus } from "@/types/meetup";
-import { VoteButtonGroup } from "./vote-button";
+import type { MeetupDetail, RelationshipStat, VoteStatus } from "@/types/meetup";
+import { SlotVoteEditor } from "./slot-vote-editor";
 import { GoogleSignInButton } from "./google-sign-in-button";
 import { ShareCard } from "./share-card";
-import { MeetupNextSteps } from "./meetup-next-steps";
+import { MeetupExpenses, MeetupNextSteps } from "./meetup-next-steps";
 import { useLanguage } from "./language-provider";
 import { ConfirmedScheduleResponse } from "./confirmed-schedule-response";
 import { ContentVotingPanel } from "./content-voting-panel";
 import { EventPlanPanel } from "./event-plan-panel";
-import { CalendarOverlay } from "./calendar-overlay";
-
-function SlotVoteEditor({ vote, onVote, disabled }: { vote?: AvailabilityVote; onVote: (status: VoteStatus, comment: string) => void; disabled: boolean }) {
-  const { language } = useLanguage();
-  const korean = language === "ko";
-  const [comment, setComment] = useState(vote?.comment ?? "");
-  return <div className="slot-vote-editor"><VoteButtonGroup value={vote?.status} onChange={(status) => onVote(status, comment)} disabled={disabled} /><label><span>{korean ? "댓글 · 선택" : "コメント・任意"}</span><textarea value={comment} maxLength={240} rows={2} onChange={(event) => setComment(event.target.value)} placeholder={korean ? "예: 18시 이후라면 가능해요" : "例：18時以降なら大丈夫です"} /></label>{vote && <button className="text-button" type="button" onClick={() => onVote(vote.status, comment)} disabled={disabled}>{korean ? "댓글 저장" : "コメントを保存"}</button>}</div>;
-}
+import { MemoryNotes } from "./memory-notes";
+import { MeetupScheduleTools } from "./meetup-schedule-tools";
 
 function tokyoDateTimeInput(value: string) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(value));
@@ -41,6 +35,8 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
   const [uid, setUid] = useState<string>();
   const [error, setError] = useState<string>();
   const [busySlot, setBusySlot] = useState<string>();
+  const [pendingVoteCount, setPendingVoteCount] = useState(0);
+  const scheduleBusy = Boolean(busySlot) || pendingVoteCount > 0;
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [accountBusy, setAccountBusy] = useState(false);
   const [scheduledTimeInput, setScheduledTimeInput] = useState("");
@@ -80,14 +76,19 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
   const me = detail?.participants.find((participant) => participant.uid === uid);
   const isHost = me?.isHost === true;
   const vote = async (slotId: string, status: VoteStatus, comment = "") => {
-    setBusySlot(slotId);
-    setError(undefined);
+    if (!uid) return;
+    setPendingVoteCount((count) => count + 1);
     try {
       await submitVote(meetupId, slotId, status, comment);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : korean ? "투표를 저장하지 못했어요." : "投票を保存できませんでした。");
+      // Only confirmed writes affect the shared totals/recommended date.
+      // The editor shows its pending choice immediately and rolls back on failure.
+      setDetail((current) => current && ({
+        ...current,
+        votes: [...current.votes.filter((item) => item.slotId !== slotId || item.participantUid !== uid),
+          { participantUid: uid, slotId, status, ...(comment.trim() ? { comment: comment.trim() } : {}) }],
+      }));
     } finally {
-      setBusySlot(undefined);
+      setPendingVoteCount((count) => count - 1);
     }
   };
 
@@ -106,6 +107,7 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
   };
 
   const confirm = async (slotId: string) => {
+    if (scheduleBusy) return;
     setBusySlot(slotId);
     setError(undefined);
     try {
@@ -165,7 +167,7 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
     }
   };
 
-  if (!detail) return <main className="loading-page"><div className="loader" /><p>{korean ? "약속을 불러오고 있어요..." : "予定を読み込んでいます…"}</p></main>;
+  if (!detail) return <main className="loading-page">{error ? <p className="error-message" role="alert">{error}</p> : <><div className="loader" /><p>{korean ? "약속을 불러오고 있어요..." : "予定を読み込んでいます…"}</p></>}</main>;
 
   const { meetup, participants, candidateSlots, votes } = detail;
   const cancelled = meetup.status === "CANCELLED";
@@ -185,8 +187,8 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
       {creator && creator.uid !== meetup.createdByUid && <p className="candidate-owner">{korean ? `${creator.displayName}님이 제안` : `${creator.displayName}さんが提案`}</p>}
       {result && <div className="vote-summary"><span className="yes">○ {result.yes}</span><span className="maybe">△ {result.maybe}</span><span className="no">× {result.no}</span>{result.no === 0 && result.yes === participants.length && <small>{korean ? "모두 가능해요!" : "全員参加できます！"}</small>}</div>}
       {votes.some((vote) => vote.slotId === slot.id) && <div className="vote-people">{voteGroups.map(({ status, voters: grouped }) => grouped.length > 0 && <div className={`vote-person-row ${status.toLowerCase()}`} key={status}><b>{status === "YES" ? "○" : status === "MAYBE" ? "△" : "×"}</b>{grouped.map((item) => <span className="vote-person-chip" key={item.participantUid}><strong>{participants.find((participant) => participant.uid === item.participantUid)?.displayName ?? (korean ? "알 수 없음" : "不明")}</strong>{item.comment && <small>“{item.comment}”</small>}</span>)}</div>)}</div>}
-      {me && !finished && <SlotVoteEditor vote={myVote} onVote={(status, comment) => void vote(slot.id, status, comment)} disabled={busySlot === slot.id} />}
-      {!confirmed && isHost && <button className="text-button schedule-slot-change" type="button" disabled={Boolean(busySlot)} onClick={() => void confirm(slot.id)}>{busySlot === slot.id ? korean ? "확정 중..." : "確定中…" : korean ? "이 일정으로 결정" : "この日程で決定"}</button>}
+      {me && !finished && <SlotVoteEditor key={`${slot.id}-${uid}`} vote={myVote} onVote={(status, comment) => vote(slot.id, status, comment)} disabled={Boolean(busySlot)} />}
+      {!confirmed && isHost && <button className="text-button schedule-slot-change" type="button" disabled={scheduleBusy} onClick={() => void confirm(slot.id)}>{busySlot === slot.id ? korean ? "확정 중..." : "確定中…" : korean ? "이 일정으로 결정" : "この日程で決定"}</button>}
       {confirmed && isHost && !finished && !isChosen && <button className="text-button schedule-slot-change" type="button" disabled={busySlot === "schedule-change"} onClick={() => { const next = tokyoDateTimeInput(slot.startDateTime); setScheduledTimeInput(next); void changeConfirmedTime(next); }}>{korean ? "이 시간으로 변경" : "この日時に変更"}</button>}
     </article>;
   };
@@ -206,7 +208,8 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
     {confirmed && !finished && meetup.confirmedDateTime && <ConfirmedScheduleResponse meetupId={meetupId} participants={participants} currentUid={uid} confirmedDateTime={meetup.confirmedDateTime} previousConfirmedDateTime={meetup.previousConfirmedDateTime} />}
     <ShareCard meetupId={meetupId} title={meetup.title} />
 
-    <section className="schedule-section">
+    {!cancelled && <nav className="planning-shortcuts" aria-label={korean ? "모임 바로가기" : "予定のショートカット"}><a href="#plan-dates">{korean ? "날짜" : "日程"}</a>{!finished && (meetup.contentVoteConfig?.food || meetup.contentVoteConfig?.activity) && <a href="#plan-activities">{korean ? "내용 투표" : "内容投票"}</a>}<a href="#plan-place">{korean ? "장소" : "場所"}</a><a href="#plan-timeline">{korean ? "할 일·플랜" : "当日プラン"}</a><a href="#plan-expenses">{korean ? "정산" : "精算"}</a></nav>}
+    <section className="schedule-section" id="plan-dates">
       <div className="section-heading"><div><p className="eyebrow">{korean ? "언제" : "いつ"}</p><h2>{cancelled ? korean ? "취소된 일정" : "中止された予定" : confirmed ? korean ? "정해진 일정" : "決まった予定" : korean ? "언제가 좋아요?" : "いつがいい？"}</h2></div><span>{votes.length}/{participants.length * candidateSlots.length} {korean ? "응답" : "回答"}</span></div>
       {!confirmed && meetup.responseDeadline && <p className="response-deadline">{korean ? "응답 마감" : "回答期限"} <b>{displayDate(meetup.responseDeadline)}</b></p>}
       {confirmed && meetup.confirmedDateTime ? <article className="finalized-schedule"><span className="finalized-date-mark">✓</span><div><p>{korean ? "결정된 일정" : "決定した日程"}</p><h3>{displayDate(meetup.confirmedDateTime)}</h3><small>{meetup.meetingPlace ? `📍 ${meetup.meetingPlace.name}` : korean ? "장소는 별도로 계속 정할 수 있어요" : "場所は別に引き続き決められます"}</small></div></article> : candidateSlots.map(renderVoteSlot)}
@@ -216,13 +219,14 @@ export function MeetupView({ meetupId }: { meetupId: string }) {
       {confirmed && isHost && !finished && <section className="schedule-change-card"><div><p className="eyebrow">{korean ? "호스트 설정" : "ホスト設定"}</p><h3>{korean ? "집합 날짜·시간 변경" : "集合日時を変更"}</h3><p>{korean ? "날짜와 시간은 언제든 바꿀 수 있고, 장소와 당일 플랜도 독립적으로 수정할 수 있어요." : "日時はいつでも変更でき、場所と当日のプランも個別に編集できます。"}</p></div><div className="schedule-change-form"><input aria-label={korean ? "집합 날짜와 시간" : "集合日時"} type="datetime-local" value={scheduleInputValue} onChange={(event) => setScheduledTimeInput(event.target.value)} /><button className="secondary-button" type="button" disabled={!scheduleInputValue || busySlot === "schedule-change"} onClick={() => void changeConfirmedTime(scheduleInputValue)}>{busySlot === "schedule-change" ? korean ? "변경 중..." : "変更中…" : korean ? "시간 변경" : "日時を変更"}</button></div></section>}
     </section>
 
-    {!confirmed && isHost && recommendation?.recommended && <section className="recommendation-box"><div><span className="recommendation-star">✦</span><div><p className="eyebrow">{korean ? "AIMASHO 추천" : "AIMASHO おすすめ"}</p><h2>{displayDate(recommendation.recommended.startDateTime)}</h2><p>{korean ? "불가능한 사람이 가장 적고, 가장 많은 친구가 참여할 수 있어요." : "参加できない人が最も少なく、いちばん多くの友だちが参加できます。"}</p></div></div><button className="primary-button" type="button" onClick={() => void confirm(recommendation.recommended!.id)} disabled={Boolean(busySlot)}>{korean ? "추천 일정으로 결정" : "おすすめの日程で決定"}</button></section>}
-    <CalendarOverlay detail={detail} />
-    <ContentVotingPanel meetupId={meetupId} detail={detail} currentUid={uid} />
+    <MeetupScheduleTools detail={detail} recommended={recommendation.recommended} isHost={isHost} confirming={Boolean(busySlot)} pendingVotes={pendingVoteCount > 0} onConfirm={(id) => void confirm(id)} />
+    <div id="plan-activities"><ContentVotingPanel meetupId={meetupId} detail={detail} currentUid={uid} /></div>
     <MeetupNextSteps meetupId={meetupId} detail={detail} currentUid={uid} isHost={isHost} />
-    <EventPlanPanel meetupId={meetupId} detail={detail} isHost={isHost} />
+    <div id="plan-timeline"><EventPlanPanel meetupId={meetupId} detail={detail} isHost={isHost} /></div>
+    {meetup.status === "COMPLETED" && <section className="social-card"><h2>{korean ? "함께한 날, 한 줄 추억" : "一緒に過ごした日のひとこと"}</h2><MemoryNotes meetupId={meetupId} /></section>}
     {isAnonymous && <section className="account-card"><div><p className="eyebrow">{korean ? "약속을 계속 저장하기" : "予定を保存しよう"}</p><h2>{korean ? "다음 약속도 aimasho에서?" : "次の予定もaimashoで？"}</h2><p>{korean ? "계정을 만들면 이번 약속을 저장하고, 그룹으로 친구들과 더 쉽게 만날 수 있어요." : "アカウントを作るとこの予定を保存し、グループで友だちともっと気軽に会えます。"}</p></div><GoogleSignInButton onClick={() => void upgradeAccount()} busy={accountBusy} /></section>}
     {isHost && <section className="danger-zone"><div><p className="eyebrow">{korean ? "일정 관리" : "予定の管理"}</p><h2>{korean ? "이 일정 삭제" : "この予定を削除"}</h2><p>{korean ? "투표, 플랜, 정산을 포함한 일정 전체가 영구 삭제됩니다." : "投票、プラン、精算を含む予定全体が完全に削除されます。"}</p></div><button className="danger-button" type="button" onClick={() => void removeMeetup()} disabled={deleting}>{deleting ? korean ? "삭제 중..." : "削除中…" : korean ? "일정 삭제" : "予定を削除"}</button></section>}
     {error && <p className="error-message page-error" role="alert">{error}</p>}
+    <MeetupExpenses meetupId={meetupId} detail={detail} uid={uid} />
   </main>;
 }

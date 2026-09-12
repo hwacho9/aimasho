@@ -62,6 +62,7 @@ const headerTitles = {
   login: { ko: "로그인", ja: "ログイン" },
   room: { ko: "그룹", ja: "グループ" },
   roomInvite: { ko: "그룹 초대", ja: "グループ招待" },
+  journey: { ko: "나의 Journey", ja: "マイ Journey" },
 } as const;
 
 export function AppHeader({ title }: { title: keyof typeof headerTitles }) {

@@ -4,9 +4,12 @@ import { updateProfile } from "firebase/auth";
 import { collection, doc, onSnapshot, orderBy, query } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { ensureAnonymousUser, firebase, trackAnalyticsEvent } from "@/lib/firebase/client";
-import type { AvailabilityVote, CandidateSlot, ContentCategory, ContentOption, ContentVote, ContentVoteConfig, Expense, FriendHistory, HomeDashboardData, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, PlanItem, PlanItemStatus, PlanItemType, Recommendation, RelationshipStat, Room, RoomDetailData, ScheduleCondition, Settlement, VoteStatus } from "@/types/meetup";
+import { createInFlightRequests } from "./in-flight-requests";
+import type { AvailabilityVote, CandidateSlot, ContentCategory, ContentOption, ContentVote, ContentVoteConfig, Expense, FriendHistory, HomeDashboardData, InvitePreview, Location, Meetup, MeetupDetail, MeetingPointCandidate, OriginCollectionStatus, Participant, ParticipantRoute, PlaceDetails, PlanItem, PlanItemStatus, PlanItemType, Recommendation, RelationshipStat, Room, RoomDetailData, ScheduleCondition, Settlement, TravelTimelineData, VoteStatus } from "@/types/meetup";
 
 const callable = <Input, Output>(name: string) => httpsCallable<Input, Output>(firebase().functions, name);
+const placeSearchRequests = createInFlightRequests<Location[]>();
+const placeDetailsRequests = createInFlightRequests<PlaceDetails>();
 
 const dashboardCacheTtlMs = 30_000;
 let dashboardCache: { uid: string; expiresAt: number; data: HomeDashboardData } | undefined;
@@ -140,9 +143,25 @@ export async function updateConfirmedScheduleAvailability(meetupId: string, stat
 }
 
 export async function searchPlaces(query: string): Promise<Location[]> {
-  await ensureAnonymousUser();
-  const response = await callable<{ query: string }, { places: Location[] }>("searchPlaces")({ query });
-  return response.data.places;
+  const normalized = query.trim();
+  if (!normalized) return [];
+  const user = await ensureAnonymousUser();
+  return placeSearchRequests(JSON.stringify([user.uid, normalized]), async () => {
+    const response = await callable<{ query: string }, { places: Location[] }>("searchPlaces")({ query: normalized });
+    return response.data.places;
+  });
+}
+
+/** Venue details are fetched only after a person asks to see them. This keeps
+ * the home/plan load fast and avoids background Place Details API requests. */
+export async function getPlaceDetails(placeId: string): Promise<PlaceDetails> {
+  const normalized = placeId.trim();
+  if (!normalized) throw new Error("placeId is required.");
+  const user = await ensureAnonymousUser();
+  return placeDetailsRequests(`${user.uid}:${normalized}`, async () => {
+    const response = await callable<{ placeId: string }, { place: PlaceDetails }>("getPlaceDetails")({ placeId: normalized });
+    return response.data.place;
+  });
 }
 
 export async function saveOrigin(meetupId: string, origin: Location) {
@@ -213,6 +232,11 @@ export async function getMyRelationships(): Promise<RelationshipStat[]> {
 
 export async function getFriendHistory(otherUid: string): Promise<FriendHistory> {
   const response = await callable<{ otherUid: string }, FriendHistory>("getFriendHistory")({ otherUid });
+  return response.data;
+}
+
+export async function getMyTravelTimeline(): Promise<TravelTimelineData> {
+  const response = await callable<Record<string, never>, TravelTimelineData>("getMyTravelTimeline")({});
   return response.data;
 }
 

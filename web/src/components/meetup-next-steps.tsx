@@ -1,31 +1,88 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import { beginLocationSelection, confirmMeetingPlace, createExpense, deleteExpense, getMeetingPointRecommendations, getSettlement, saveOrigin, searchPlaces, updateExpense } from "@/services/meetup-repository";
+import { FormEvent, useMemo, useRef, useState } from "react";
+import { beginLocationSelection, confirmMeetingPlace, createExpense, deleteExpense, getMeetingPointRecommendations, getSettlement, saveOrigin, updateExpense } from "@/services/meetup-repository";
 import type { Expense, Location, MeetingPointCandidate, MeetupDetail, Settlement } from "@/types/meetup";
 import { useLanguage } from "./language-provider";
-
-function PlaceSearch({ onPick, label }: { onPick: (place: Location) => void; label?: string }) {
-  const { language } = useLanguage(); const korean = language === "ko";
-  const [query, setQuery] = useState(""); const [places, setPlaces] = useState<Location[]>([]); const [searching, setSearching] = useState(false); const [error, setError] = useState<string>();
-  const submit = async (event: FormEvent) => { event.preventDefault(); if (!query.trim()) return; setSearching(true); setError(undefined); try { setPlaces(await searchPlaces(query)); } catch { setPlaces([]); setError(korean ? "장소를 검색하지 못했어요. Google Places 서버 키와 결제·API 설정을 확인해 주세요." : "場所を検索できませんでした。Google Places のサーバーキー、課金、API 設定を確認してください。"); } finally { setSearching(false); } };
-  return <div className="place-search"><form onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={label ?? (korean ? "역 / 장소 / 주소 검색" : "駅・場所・住所を検索")} /><button type="submit" disabled={searching}>{searching ? korean ? "검색 중" : "検索中" : korean ? "검색" : "検索"}</button></form>{error && <p className="error-message">{error}</p>}{places.length > 0 && <div className="place-results">{places.map((place) => <button type="button" key={place.placeId} onClick={() => { onPick(place); setPlaces([]); }}><strong>{place.name}</strong><small>{place.address}</small></button>)}</div>}</div>;
-}
+import { PlaceSearch } from "./place-search";
+import { AimashoIcon } from "./aimasho-icon";
+import { PlaceMapPreview } from "./place-map-preview";
 
 function OriginStep({ meetupId, detail, currentUid, isHost }: { meetupId: string; detail: MeetupDetail; currentUid?: string; isHost: boolean }) {
   const { language } = useLanguage(); const korean = language === "ko";
   const [saving, setSaving] = useState(false); const [editing, setEditing] = useState(false); const [error, setError] = useState<string>(); const mine = detail.participants.find((participant) => participant.uid === currentUid); const completed = detail.participants.filter((participant) => participant.hasOrigin).length;
   const save = async (origin: Location) => { setSaving(true); setError(undefined); try { await saveOrigin(meetupId, origin); setEditing(false); } catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "출발 위치를 저장하지 못했어요." : "出発地を保存できませんでした。"); } finally { setSaving(false); } };
   const proceed = async () => { setSaving(true); try { await beginLocationSelection(meetupId); } catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "장소 선택을 시작하지 못했어요." : "場所選びを開始できませんでした。"); } finally { setSaving(false); } };
-  return <section className="next-step"><p className="eyebrow">{korean ? "출발지 · 언제든 수정" : "出発地・いつでも編集"}</p><h2>{korean ? "어디서 출발하나요?" : "どこから出発しますか？"}</h2><p className="step-copy">{korean ? "정확한 좌표는 공개되지 않지만, 선택한 출발지 이름은 참가자에게 표시돼요." : "正確な座標は公開されませんが、選んだ出発地名は参加者に表示されます。"}</p>{mine?.hasOrigin && !editing ? <div className="saved-location saved-location-edit">✓ <span><strong>{mine.originArea ?? (korean ? "출발 위치" : "出発地")}</strong>{korean ? "에서 출발" : "から出発"}</span><button type="button" className="text-button" onClick={() => setEditing(true)}>{korean ? "변경" : "変更"}</button></div> : <PlaceSearch onPick={(place) => void save(place)} />}{saving && <p className="inline-note">{korean ? "위치를 저장하고 있어요..." : "場所を保存しています…"}</p>}{error && <p className="error-message">{error}</p>}<div className="origin-progress"><span>{korean ? "출발 위치 등록" : "出発地の登録"}</span><b>{completed}/{detail.participants.length}{korean ? "명" : "人"}</b></div><div className="origin-names">{detail.participants.map((participant) => <span key={participant.uid} className={participant.hasOrigin ? "ready" : ""}>{participant.hasOrigin ? "✓" : "○"} {participant.displayName}</span>)}</div>{isHost && completed >= 2 && <button className="primary-button proceed-button" onClick={() => void proceed()} disabled={saving}>{korean ? "중간지점 추천 준비" : "中間地点のおすすめを準備"}</button>}</section>;
+  return <section className="next-step"><p className="eyebrow">{korean ? "출발지 · 언제든 수정" : "出発地・いつでも編集"}</p><h2>{korean ? "어디서 출발하나요?" : "どこから出発しますか？"}</h2><p className="step-copy">{korean ? "정확한 좌표는 공개되지 않지만, 선택한 출발지 이름은 참가자에게 표시돼요." : "正確な座標は公開されませんが、選んだ出発地名は参加者に表示されます。"}</p>{mine?.hasOrigin && !editing ? <div className="saved-location saved-location-edit">✓ <span><strong>{mine.originArea ?? (korean ? "출발 위치" : "出発地")}</strong>{korean ? "에서 출발" : "から出発"}</span><button type="button" className="text-button" onClick={() => setEditing(true)}>{korean ? "변경" : "変更"}</button></div> : <PlaceSearch disabled={saving} onPick={(place) => void save(place)} />}{saving && <p className="inline-note">{korean ? "위치를 저장하고 있어요..." : "場所を保存しています…"}</p>}{error && <p className="error-message">{error}</p>}<div className="origin-progress"><span>{korean ? "출발 위치 등록" : "出発地の登録"}</span><b>{completed}/{detail.participants.length}{korean ? "명" : "人"}</b></div><div className="origin-names">{detail.participants.map((participant) => <span key={participant.uid} className={participant.hasOrigin ? "ready" : ""}>{participant.hasOrigin ? "✓" : "○"} {participant.displayName}</span>)}</div>{isHost && completed >= 2 && <button className="primary-button proceed-button" onClick={() => void proceed()} disabled={saving}>{korean ? "중간지점 추천 준비" : "中間地点のおすすめを準備"}</button>}</section>;
 }
 
-function LocationStep({ meetupId, isHost }: { meetupId: string; isHost: boolean }) {
-  const { language } = useLanguage(); const korean = language === "ko";
-  const [mode, setMode] = useState<"FAIR" | "FAST">("FAIR"); const [candidates, setCandidates] = useState<MeetingPointCandidate[]>([]); const [loading, setLoading] = useState(false); const [error, setError] = useState<string>();
-  const recommend = async (nextMode = mode) => { setMode(nextMode); setLoading(true); setError(undefined); try { setCandidates(await getMeetingPointRecommendations(meetupId, nextMode)); } catch { setError(korean ? "중간지점 이동 시간을 계산하지 못했어요. 잠시 후 다시 시도해 주세요." : "中間地点までの移動時間を計算できませんでした。少し待ってからもう一度お試しください。"); } finally { setLoading(false); } };
-  const choose = async (place: Location) => { setLoading(true); try { await confirmMeetingPlace(meetupId, place); } catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "장소를 확정하지 못했어요." : "場所を確定できませんでした。"); } finally { setLoading(false); } };
-  return <section className="next-step"><p className="eyebrow">{korean ? "만날 장소 · 독립적으로 선택" : "集合場所・いつでも選択"}</p><h2>{korean ? "어디서 만날까요?" : "どこで会いますか？"}</h2>{!isHost ? <p className="step-copy">{korean ? "호스트가 만날 장소를 고르고 있어요." : "ホストが会う場所を選んでいます。"}</p> : <><p className="step-copy">{korean ? "날짜 확정 전에도 장소를 검색하거나 중간지점을 추천받을 수 있어요." : "日程確定前でも場所を検索したり、中間地点をおすすめできます。"}</p><div className="mode-toggle"><button className={mode === "FAIR" ? "active" : ""} onClick={() => void recommend("FAIR")}>{korean ? "⚖️ 공평하게" : "⚖️ 公平に"}</button><button className={mode === "FAST" ? "active" : ""} onClick={() => void recommend("FAST")}>{korean ? "⚡ 전체적으로 빠르게" : "⚡ 全体的に早く"}</button></div><button className="secondary-button" onClick={() => void recommend()} disabled={loading}>{loading ? korean ? "추천 계산 중..." : "計算中…" : korean ? "✨ 중간지점 추천" : "✨ 中間地点をおすすめ"}</button><div className="direct-place"><span>{korean ? "또는 직접 장소 정하기" : "または場所を直接決める"}</span><PlaceSearch label={korean ? "장소 검색" : "場所を検索"} onPick={(place) => void choose(place)} /></div>{candidates.map((candidate, index) => <article className="place-candidate" key={candidate.placeId}><div><p>{index === 0 ? korean ? "🥇 AIMASHO 추천" : "🥇 AIMASHO おすすめ" : korean ? `후보 ${index + 1}` : `候補 ${index + 1}`}</p><h3>{candidate.name}</h3><small>{korean ? `평균 ${candidate.averageDurationMinutes}분 · 가장 긴 이동 ${candidate.maxDurationMinutes}분` : `平均 ${candidate.averageDurationMinutes}分 · 最長 ${candidate.maxDurationMinutes}分`}</small></div><button className="primary-button" disabled={loading} onClick={() => void choose(candidate)}>{korean ? "여기서 만나기" : "ここで会う"}</button></article>)}</>}{error && <p className="error-message">{error}</p>}</section>;
+export function LocationStep({ meetupId, isHost }: { meetupId: string; isHost: boolean }) {
+  const { language } = useLanguage();
+  const korean = language === "ko";
+  const [mode, setMode] = useState<"FAIR" | "FAST">("FAIR");
+  const [candidates, setCandidates] = useState<MeetingPointCandidate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [choosing, setChoosing] = useState(false);
+  const [error, setError] = useState<string>();
+  const request = useRef(0);
+  const recommending = useRef(false);
+  const saving = useRef(false);
+  const selectMode = (next: "FAIR" | "FAST") => {
+    if (next === mode) return;
+    setMode(next);
+    setCandidates([]);
+    setError(undefined);
+  };
+  const recommend = async () => {
+    if (recommending.current || saving.current) return;
+    recommending.current = true;
+    const generation = ++request.current;
+    setLoading(true); setError(undefined);
+    try {
+      const results = await getMeetingPointRecommendations(meetupId, mode);
+      if (generation === request.current) setCandidates(results);
+    } catch {
+      if (generation === request.current) setError(korean ? "중간지점을 추천하지 못했어요. 잠시 후 다시 시도해 주세요." : "中間地点をおすすめできませんでした。少し待ってからもう一度お試しください。");
+    } finally {
+      recommending.current = false;
+      setLoading(false);
+    }
+  };
+  const choose = async (place: Location) => {
+    if (saving.current) return;
+    saving.current = true;
+    request.current += 1; // A late recommendation must not replace a manually selected place.
+    setChoosing(true); setError(undefined);
+    try { await confirmMeetingPlace(meetupId, place); setCandidates([]); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : korean ? "장소를 확정하지 못했어요." : "場所を確定できませんでした。"); }
+    finally { saving.current = false; setChoosing(false); }
+  };
+  return <section className="next-step location-step">
+    <p className="eyebrow">{korean ? "만날 장소 · 언제든 선택" : "集合場所・いつでも選択"}</p>
+    <h2>{korean ? "어디서 만날까요?" : "どこで会いますか？"}</h2>
+    {!isHost ? <p className="step-copy">{korean ? "호스트가 만날 장소를 고르고 있어요." : "ホストが会う場所を選んでいます。"}</p> : <>
+      <p className="step-copy">{korean ? "날짜 확정 전에도 장소를 검색하거나 중간지점을 추천받을 수 있어요." : "日程確定前でも場所を検索したり、中間地点をおすすめできます。"}</p>
+      <div className="location-recommendation">
+        <div className="mode-toggle" role="group" aria-label={korean ? "추천 기준" : "おすすめの基準"}>
+          <button type="button" aria-pressed={mode === "FAIR"} className={mode === "FAIR" ? "active" : ""} disabled={loading || choosing} onClick={() => selectMode("FAIR")}>{korean ? "공평하게" : "公平に"}</button>
+          <button type="button" aria-pressed={mode === "FAST"} className={mode === "FAST" ? "active" : ""} disabled={loading || choosing} onClick={() => selectMode("FAST")}>{korean ? "전체적으로 빠르게" : "全体的に早く"}</button>
+        </div>
+        <p className="inline-note">{korean ? "기준을 고른 뒤 추천 버튼을 눌러 주세요." : "基準を選んでから、おすすめボタンを押してください。"}</p>
+        <button type="button" className="secondary-button location-recommend-button" onClick={() => void recommend()} disabled={loading || choosing} aria-busy={loading}><AimashoIcon name="sparkles" />{loading ? korean ? "추천 계산 중..." : "おすすめを計算中…" : korean ? "중간지점 추천" : "中間地点をおすすめ"}</button>
+      </div>
+      {loading && <p className="action-status" role="status">{korean ? "추천을 기다리는 동안 직접 장소를 검색해도 괜찮아요." : "おすすめを待つ間も、下で場所を検索できます。"}</p>}
+      <div className="direct-place">
+        <span>{korean ? "또는 직접 장소 정하기" : "または場所を直接決める"}</span>
+        <PlaceSearch label={korean ? "장소 검색" : "場所を検索"} disabled={choosing} onPick={(place) => void choose(place)} />
+      </div>
+      {choosing && <p className="action-status" role="status">{korean ? "장소를 저장하고 있어요..." : "場所を保存しています…"}</p>}
+      {candidates.map((candidate, index) => <article className="place-candidate" key={candidate.placeId}>
+        <div><p>{index === 0 ? korean ? "AIMASHO 추천" : "AIMASHO おすすめ" : korean ? `후보 ${index + 1}` : `候補 ${index + 1}`}</p><h3>{candidate.name}</h3><small>{korean ? `평균 ${candidate.averageDurationMinutes}분 · 가장 긴 이동 ${candidate.maxDurationMinutes}분` : `平均 ${candidate.averageDurationMinutes}分 · 最長 ${candidate.maxDurationMinutes}分`}</small></div>
+        <button type="button" className="primary-button" disabled={choosing} onClick={() => void choose(candidate)}>{korean ? "여기서 만나기" : "ここで会う"}</button>
+      </article>)}
+    </>}
+    {error && <p className="error-message" role="alert">{error}</p>}
+  </section>;
 }
 
 function MeetingPlaceReadyStep({ detail }: { detail: MeetupDetail }) {
@@ -34,11 +91,12 @@ function MeetingPlaceReadyStep({ detail }: { detail: MeetupDetail }) {
   return <section className="next-step">
     <p className="eyebrow">{korean ? "장소 확정" : "場所確定"}</p>
     <h2>{detail.meetup.meetingPlace?.name}{korean ? "에서 만나요" : "で会いましょう"}</h2>
+    {detail.meetup.meetingPlace && <PlaceMapPreview place={detail.meetup.meetingPlace} />}
     <p className="step-copy">{korean ? "출발·도착 시간 계산과 출발 알림은 현재 비활성화되어 있어요. 실제 이동 경로와 시간은 지도 앱에서 확인해 주세요." : "出発・到着時刻の計算と出発通知は現在停止しています。実際の経路と時刻は地図アプリでご確認ください。"}</p>
   </section>;
 }
 
-function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: MeetupDetail; uid?: string }) {
+export function MeetupExpenses({ meetupId, detail, uid }: { meetupId: string; detail: MeetupDetail; uid?: string }) {
   const { language, locale } = useLanguage();
   const korean = language === "ko";
   const yen = (value: number) => new Intl.NumberFormat(locale, { style: "currency", currency: "JPY", maximumFractionDigits: 0 }).format(value);
@@ -50,6 +108,12 @@ function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: Mee
   const [editingExpense, setEditingExpense] = useState<Expense>();
   const [saving, setSaving] = useState(false);
   const [settlement, setSettlement] = useState<Settlement>();
+  const [calculating, setCalculating] = useState(false);
+  const [settlementSignature, setSettlementSignature] = useState<string>();
+  const settlementRequest = useRef(0);
+  const mutationPending = useRef(false);
+  const calculationPending = useRef(false);
+  const expenseSignature = JSON.stringify([detail.expenses, detail.participants.map((person) => person.uid)]);
   const [error, setError] = useState<string>();
   const names = useMemo(() => new Map(detail.participants.map((participant) => [participant.uid, participant.displayName])), [detail.participants]);
 
@@ -70,6 +134,10 @@ function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: Mee
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (mutationPending.current) return;
+    mutationPending.current = true;
+    settlementRequest.current += 1;
+    setSettlement(undefined);
     setSaving(true);
     setError(undefined);
     try {
@@ -77,37 +145,54 @@ function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: Mee
       if (editingExpense) await updateExpense(meetupId, editingExpense.id, input);
       else await createExpense(meetupId, input);
       clearForm();
-      setSettlement(await getSettlement(meetupId));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : korean ? "비용을 저장하지 못했어요." : "支出を保存できませんでした。");
     } finally {
+      mutationPending.current = false;
       setSaving(false);
     }
   };
   const remove = async (expense: Expense) => {
+    if (mutationPending.current) return;
     const confirmed = window.confirm(korean ? `‘${expense.title}’ 지출을 삭제할까요?` : `「${expense.title}」の支出を削除しますか？`);
     if (!confirmed) return;
+    mutationPending.current = true;
+    settlementRequest.current += 1;
+    setSettlement(undefined);
     setSaving(true);
     setError(undefined);
     try {
       await deleteExpense(meetupId, expense.id);
       if (editingExpense?.id === expense.id) clearForm();
-      setSettlement(await getSettlement(meetupId));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : korean ? "비용을 삭제하지 못했어요." : "支出を削除できませんでした。");
     } finally {
+      mutationPending.current = false;
       setSaving(false);
     }
   };
   const refresh = async () => {
+    if (calculationPending.current || mutationPending.current) return;
+    calculationPending.current = true;
+    const generation = ++settlementRequest.current;
+    setCalculating(true);
+    setError(undefined);
     try {
-      setSettlement(await getSettlement(meetupId));
+      const result = await getSettlement(meetupId);
+      if (generation === settlementRequest.current) {
+        setSettlement(result);
+        setSettlementSignature(expenseSignature);
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : korean ? "정산을 계산하지 못했어요." : "精算を計算できませんでした。");
+      if (generation === settlementRequest.current) setError(caught instanceof Error ? caught.message : korean ? "정산을 계산하지 못했어요." : "精算を計算できませんでした。");
+    } finally {
+      calculationPending.current = false;
+      setCalculating(false);
     }
   };
 
-  return <section className="next-step expenses-step">
+  if (detail.meetup.status === "CANCELLED") return null;
+  return <section className="next-step expenses-step" id="plan-expenses">
     <p className="eyebrow">{korean ? "정산" : "精算"}</p>
     <h2>{korean ? "정산하기" : "精算する"}</h2>
     <p className="step-copy">{korean ? "송금은 직접 진행하고, aimasho는 가장 간단한 정산 경로를 알려드려요." : "送金は直接行い、aimashoは最もシンプルな精算方法を案内します。"}</p>
@@ -131,18 +216,17 @@ function ExpensesStep({ meetupId, detail, uid }: { meetupId: string; detail: Mee
         {canManage && <span className="expense-actions"><button className="text-button" type="button" onClick={() => startEditing(expense)} disabled={saving}>{korean ? "수정" : "編集"}</button><button className="text-button danger-button" type="button" onClick={() => void remove(expense)} disabled={saving}>{korean ? "삭제" : "削除"}</button></span>}
       </article>;
     })}</div>}
-    <button className="primary-button" onClick={() => void refresh()} disabled={detail.expenses.length === 0}>{korean ? "정산 결과 보기" : "精算結果を見る"}</button>
-    {settlement && <div className="settlement-result"><h3>{korean ? "총" : "合計"} {yen(settlement.totalAmount)}</h3>{settlement.transfers.length === 0 ? <p>{korean ? "모두 정산되었어요!" : "精算は完了しています！"}</p> : settlement.transfers.map((transfer) => <p key={`${transfer.fromUid}-${transfer.toUid}`}><b>{names.get(transfer.fromUid)}</b> → <b>{names.get(transfer.toUid)}</b><span>{yen(transfer.amount)}</span></p>)}</div>}
+    <button type="button" className="primary-button" onClick={() => void refresh()} disabled={saving || calculating || detail.expenses.length === 0} aria-busy={calculating}>{calculating ? korean ? "정산 계산 중..." : "精算を計算中…" : korean ? "정산 결과 보기" : "精算結果を見る"}</button>
+    {settlement && settlementSignature === expenseSignature && <div className="settlement-result"><h3>{korean ? "총" : "合計"} {yen(settlement.totalAmount)}</h3>{settlement.transfers.length === 0 ? <p>{korean ? "모두 정산되었어요!" : "精算は完了しています！"}</p> : settlement.transfers.map((transfer) => <p key={`${transfer.fromUid}-${transfer.toUid}`}><b>{names.get(transfer.fromUid)}</b> → <b>{names.get(transfer.toUid)}</b><span>{yen(transfer.amount)}</span></p>)}</div>}
     {error && <p className="error-message">{error}</p>}
   </section>;
 }
 
 export function MeetupNextSteps({ meetupId, detail, currentUid, isHost }: { meetupId: string; detail: MeetupDetail; currentUid?: string; isHost: boolean }) {
   if (detail.meetup.status === "CANCELLED") return null;
-  return <div className="parallel-planning-board">
+  return <div className="parallel-planning-board" id="plan-place">
     {detail.meetup.collectOrigins !== false && detail.meetup.status !== "COMPLETED" && <OriginStep meetupId={meetupId} detail={detail} currentUid={currentUid} isHost={isHost} />}
     {detail.meetup.meetingPlace && <MeetingPlaceReadyStep detail={detail} />}
     {detail.meetup.status !== "COMPLETED" && (!detail.meetup.meetingPlace || isHost) && <LocationStep meetupId={meetupId} isHost={isHost} />}
-    <ExpensesStep meetupId={meetupId} detail={detail} uid={currentUid} />
   </div>;
 }

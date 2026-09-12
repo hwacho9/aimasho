@@ -8,6 +8,8 @@ import type { HistoryMeetup, HomeDashboardData } from "@/types/meetup";
 import { AimashoIcon } from "./aimasho-icon";
 import { useLanguage } from "./language-provider";
 
+type DashboardFilter = "ALL" | "UPCOMING" | "COMPLETED";
+
 function meetupDate(meetup: HistoryMeetup) {
   return meetup.confirmedDateTime ?? meetup.candidateDateTimes?.[0] ?? meetup.completedAt;
 }
@@ -41,6 +43,8 @@ export function HomeDashboard() {
   const [data, setData] = useState<HomeDashboardData>();
   const [loadFailed, setLoadFailed] = useState(false);
   const [view, setView] = useState<"CALENDAR" | "TIMELINE">("CALENDAR");
+  const [filter, setFilter] = useState<DashboardFilter>("ALL");
+  const [query, setQuery] = useState("");
   const [month, setMonth] = useState({ year: today.getFullYear(), month: today.getMonth() + 1 });
 
   useEffect(() => {
@@ -57,22 +61,34 @@ export function HomeDashboard() {
     return [...Array(firstWeekday).fill(null), ...Array.from({ length: days }, (_, index) => index + 1)];
   }, [month]);
 
-  const eventsByDate = useMemo(() => {
-    const result = new Map<string, HistoryMeetup[]>();
-    for (const meetup of data?.meetups ?? []) {
-      const key = dateKey(meetupDate(meetup));
-      if (key) result.set(key, [...(result.get(key) ?? []), meetup]);
-    }
-    return result;
-  }, [data?.meetups]);
-
-  const timeline = useMemo(() => data?.meetups.slice(0, 12) ?? [], [data?.meetups]);
   const upcoming = useMemo(
     () => data?.meetups.filter((meetup) => !["COMPLETED", "CANCELLED"].includes(meetup.status)) ?? [],
     [data?.meetups],
   );
   const ownedUpcoming = useMemo(() => upcoming.filter((meetup) => meetup.isOwner), [upcoming]);
+  const filteredMeetups = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase(locale);
+    return (data?.meetups ?? []).filter((meetup) => {
+      if (filter === "UPCOMING" && ["COMPLETED", "CANCELLED"].includes(meetup.status)) return false;
+      if (filter === "COMPLETED" && meetup.status !== "COMPLETED") return false;
+      if (!normalizedQuery) return true;
+      return [meetup.title, meetup.roomName, meetup.meetingPlace?.name]
+        .filter(Boolean)
+        .some((value) => value!.toLocaleLowerCase(locale).includes(normalizedQuery));
+    });
+  }, [data?.meetups, filter, locale, query]);
+  const eventsByDate = useMemo(() => {
+    const result = new Map<string, HistoryMeetup[]>();
+    for (const meetup of filteredMeetups) {
+      const key = dateKey(meetupDate(meetup));
+      if (key) result.set(key, [...(result.get(key) ?? []), meetup]);
+    }
+    return result;
+  }, [filteredMeetups]);
+
+  const timeline = useMemo(() => filteredMeetups.slice(0, 20), [filteredMeetups]);
   const nextMeetup = upcoming[0];
+  const todayKey = dateKey(today.toISOString());
 
   const moveMonth = (offset: number) => setMonth((current) => {
     const value = new Date(Date.UTC(current.year, current.month - 1 + offset, 1));
@@ -122,6 +138,12 @@ export function HomeDashboard() {
       <small><span>{korean ? `예정 ${data.summary.upcomingMeetupCount}` : `予定 ${data.summary.upcomingMeetupCount}`}</span><span>{korean ? `완료 ${data.summary.completedMeetupCount}` : `完了 ${data.summary.completedMeetupCount}`}</span></small>
     </div> : null}
 
+    <Link className="dashboard-journey-link" href="/journey">
+      <span className="dashboard-journey-icon"><AimashoIcon name="map" /></span>
+      <span><small>MY AIMASHO JOURNEY</small><b>{korean ? "함께한 장소를 지도에서 재생" : "一緒に訪れた場所を地図で再生"}</b><em>{korean ? "완료한 약속을 날짜순으로 돌아보세요." : "完了した予定を日付順に振り返りましょう。"}</em></span>
+      <strong>→</strong>
+    </Link>
+
     {nextMeetup ? <Link className="dashboard-next-meetup" href={`/m/${nextMeetup.id}`}>
       <span className="dashboard-next-icon"><AimashoIcon name="calendar" /></span>
       <span className="dashboard-next-copy"><small>{korean ? "가장 가까운 약속" : "いちばん近い予定"}</small><b>{nextMeetup.title}</b><em>{displayDate(meetupDate(nextMeetup))}{nextMeetup.roomName ? ` · ${nextMeetup.roomName}` : ""}{nextMeetup.meetingPlace ? ` · ${nextMeetup.meetingPlace.name}` : ""}</em></span>
@@ -138,12 +160,45 @@ export function HomeDashboard() {
       </Link>)}</div>
     </section> : null}
 
+    <div className="dashboard-tools" role="search">
+      <label className="dashboard-search">
+        <span aria-hidden="true">⌕</span>
+        <span className="sr-only">{korean ? "일정 검색" : "予定を検索"}</span>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={korean ? "일정·그룹·장소 검색" : "予定・グループ・場所を検索"}
+        />
+      </label>
+      <div className="dashboard-filter" role="group" aria-label={korean ? "일정 상태 필터" : "予定ステータスフィルター"}>
+        {([
+          ["ALL", korean ? "전체" : "すべて", data.meetups.length],
+          ["UPCOMING", korean ? "예정" : "予定", upcoming.length],
+          ["COMPLETED", korean ? "완료" : "完了", data.summary.completedMeetupCount],
+        ] as const).map(([value, label, count]) => <button
+          type="button"
+          className={filter === value ? "active" : ""}
+          aria-pressed={filter === value}
+          onClick={() => setFilter(value)}
+          key={value}
+        >{label}<b>{count}</b></button>)}
+      </div>
+      <span className="dashboard-result-count" aria-live="polite">
+        {korean ? `${filteredMeetups.length}개의 일정` : `${filteredMeetups.length}件の予定`}
+      </span>
+    </div>
+
     <div className="dashboard-view-heading">
       <div><p className="eyebrow">SCHEDULE</p><h3>{korean ? "내 캘린더" : "マイカレンダー"}</h3></div>
       <div className="history-view-toggle"><button className={view === "CALENDAR" ? "active" : ""} onClick={() => setView("CALENDAR")}>{korean ? "캘린더" : "カレンダー"}</button><button className={view === "TIMELINE" ? "active" : ""} onClick={() => setView("TIMELINE")}>{korean ? "타임라인" : "タイムライン"}</button></div>
     </div>
 
-    {view === "CALENDAR" ? <div className="dashboard-calendar-wrap">
+    {filteredMeetups.length === 0 ? <div className="dashboard-filter-empty">
+      <span aria-hidden="true"><AimashoIcon name="calendar" /></span>
+      <div><b>{korean ? "조건에 맞는 일정이 없어요" : "条件に合う予定がありません"}</b><small>{korean ? "검색어나 상태 필터를 바꿔보세요." : "検索語やステータスを変更してみてください。"}</small></div>
+      <button type="button" onClick={() => { setQuery(""); setFilter("ALL"); }}>{korean ? "초기화" : "リセット"}</button>
+    </div> : view === "CALENDAR" ? <div className="dashboard-calendar-wrap">
       <div className="dashboard-calendar">
         <div className="calendar-month-heading"><button type="button" onClick={() => moveMonth(-1)} aria-label={korean ? "이전 달" : "前の月"}>‹</button><b>{month.year}. {String(month.month).padStart(2, "0")}</b><button type="button" onClick={() => moveMonth(1)} aria-label={korean ? "다음 달" : "次の月"}>›</button></div>
         <div className="calendar-weekdays">{(korean ? ["일", "월", "화", "수", "목", "금", "토"] : ["日", "月", "火", "水", "木", "金", "土"]).map((day) => <span key={day}>{day}</span>)}</div>
@@ -151,7 +206,7 @@ export function HomeDashboard() {
           if (!day) return <span className="calendar-day empty" key={`empty-${index}`} />;
           const key = `${month.year}-${String(month.month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
           const events = eventsByDate.get(key) ?? [];
-          return <span className={`calendar-day ${events.length ? "has-event" : ""}`} key={key}>
+          return <span className={`calendar-day ${events.length ? "has-event" : ""} ${key === todayKey ? "today" : ""}`} aria-current={key === todayKey ? "date" : undefined} key={key}>
             <b>{day}</b>
             {events.slice(0, 2).map((meetup) => <Link className={meetup.status.toLowerCase()} href={`/m/${meetup.id}`} title={meetup.title} key={meetup.id}>{meetup.title}</Link>)}
             {events.length > 2 ? <small>+{events.length - 2}</small> : null}
