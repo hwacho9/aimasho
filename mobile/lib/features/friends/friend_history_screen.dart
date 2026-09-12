@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../app/theme.dart';
 import '../../models/meetup.dart';
 import '../../providers/meetup_providers.dart';
+import '../journey/journey_player.dart';
 
 class FriendHistoryScreen extends ConsumerStatefulWidget {
   const FriendHistoryScreen({super.key, required this.otherUid});
@@ -85,6 +86,13 @@ class _FriendHistoryScreenState extends ConsumerState<FriendHistoryScreen> {
                                     color: AimashoColors.muted,
                                     fontWeight: FontWeight.w700))
                           ])),
+                      const SizedBox(height: 28),
+                      const Text('둘만의 Journey',
+                          style: TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 12),
+                      JourneyPlayer(
+                          stops: history.stops, height: 290, compact: true),
                       const SizedBox(height: 28),
                       const Text('약속 타임라인',
                           style: TextStyle(

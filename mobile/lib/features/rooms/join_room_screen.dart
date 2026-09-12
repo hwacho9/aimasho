@@ -72,6 +72,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
       final roomId = await ref
           .read(meetupRepositoryProvider)
           .joinRoom(widget.inviteCode, _name.text.trim());
+      ref.invalidate(dashboardProvider);
       if (mounted) context.go('/rooms/$roomId');
     } catch (error) {
       if (mounted)

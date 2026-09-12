@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../app/theme.dart';
 import '../../models/meetup.dart';
+import '../../presentation/meetup_presentation.dart';
 import '../../providers/meetup_providers.dart';
 
 class RoomScreen extends ConsumerStatefulWidget {
@@ -32,7 +33,10 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
     final repository = ref.read(meetupRepositoryProvider);
     final user = await repository.ensureAnonymousUser();
     if (!user.isAnonymous && mounted) {
-      setState(() => _detail = repository.roomDetail(widget.roomId));
+      final detail = repository.roomDetail(widget.roomId);
+      setState(() {
+        _detail = detail;
+      });
     }
   }
 
@@ -44,7 +48,10 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
       await repository.saveProfile(user.displayName ?? 'aimasho user');
       ref.invalidate(dashboardProvider);
       if (mounted) {
-        setState(() => _detail = repository.roomDetail(widget.roomId));
+        final detail = repository.roomDetail(widget.roomId);
+        setState(() {
+          _detail = detail;
+        });
       }
     } catch (error) {
       if (mounted) {
@@ -155,7 +162,9 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
         onRefresh: () async {
           final next =
               ref.read(meetupRepositoryProvider).roomDetail(widget.roomId);
-          setState(() => _detail = next);
+          setState(() {
+            _detail = next;
+          });
           await next;
         },
         child: ListView(padding: const EdgeInsets.all(24), children: [
@@ -224,7 +233,7 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
               contentPadding: EdgeInsets.zero,
               leading: CircleAvatar(
                   backgroundColor: const Color(0xFFFFE5D6),
-                  child: Text(member.displayName.characters.first)),
+                  child: Text(displayInitial(member.displayName))),
               title: Text(member.displayName),
               trailing: Text(member.role == 'OWNER' ? '관리자' : '멤버',
                   style: const TextStyle(
@@ -272,7 +281,7 @@ class _RoomScreenState extends ConsumerState<RoomScreen> {
                 title: Text(meetup.title,
                     style: const TextStyle(fontWeight: FontWeight.w800)),
                 subtitle: Text([
-                  _statusLabel(meetup.status),
+                  meetupStatusLabel(meetup.status),
                   if (meetup.confirmedDateTime != null)
                     DateFormat('M/d HH:mm').format(meetup.confirmedDateTime!),
                   if (meetup.occurrence != null) '${meetup.occurrence}번째 만남'
@@ -352,13 +361,6 @@ class _SummaryCard extends StatelessWidget {
             style: const TextStyle(fontSize: 11, color: AimashoColors.muted))
       ]));
 }
-
-String _statusLabel(String status) => switch (status) {
-      'SCHEDULING' => '조율 중',
-      'COMPLETED' => '완료',
-      'CANCELLED' => '취소',
-      _ => '예정'
-    };
 
 const _eyebrow = TextStyle(
     fontSize: 11,

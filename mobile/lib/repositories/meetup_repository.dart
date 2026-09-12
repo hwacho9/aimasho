@@ -6,11 +6,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../models/meetup.dart';
+import '../models/social.dart';
 import '../services/analytics.dart';
 import '../services/firebase_bootstrap.dart';
+import 'mappers/dashboard_mapper.dart';
 
 class MeetupRepository {
   MeetupRepository(
@@ -29,8 +32,74 @@ class MeetupRepository {
   }
 
   final FirebaseAuth _auth;
+
+  Future<SocialOverview> socialOverview() async {
+    final result = await _functions.httpsCallable('getMySocialOverview').call();
+    return SocialOverview.fromMap(
+        Map<String, dynamic>.from(result.data as Map));
+  }
+
+  Future<List<MemoryNote>> memoryNotes(String meetupId) async {
+    final result = await _functions
+        .httpsCallable('getMeetupMemories')
+        .call({'meetupId': meetupId});
+    return ((result.data as Map)['notes'] as List)
+        .map((item) =>
+            MemoryNote.fromMap(Map<String, dynamic>.from(item as Map)))
+        .toList();
+  }
+
+  Future<void> saveMemory(String meetupId, String body) async {
+    await _functions
+        .httpsCallable('saveMeetupMemory')
+        .call({'meetupId': meetupId, 'body': body.trim()});
+  }
+
+  Future<void> deleteMemory(String meetupId) async {
+    await _functions
+        .httpsCallable('deleteMeetupMemory')
+        .call({'meetupId': meetupId});
+  }
+
+  Future<List<DashboardMeetup>> guestMeetups() async {
+    if (_auth.currentUser == null) return [];
+    final result = await _functions.httpsCallable('getMyMeetups').call();
+    final data = Map<String, dynamic>.from(result.data as Map);
+    return (data['meetups'] as List).map((item) {
+      final map = Map<String, dynamic>.from(item as Map);
+      return DashboardMeetup(
+          id: map['id'] as String,
+          title: map['title'] as String,
+          status: map['status'] as String,
+          isOwner: map['isOwner'] == true,
+          confirmedDateTime: map['confirmedDateTime'] is String
+              ? DateTime.parse(map['confirmedDateTime'] as String).toLocal()
+              : null,
+          candidateDateTimes: (map['candidateDateTimes'] as List? ?? [])
+              .map((date) => DateTime.parse(date as String).toLocal())
+              .toList());
+    }).toList();
+  }
+
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
+  static const _dashboardCacheDuration = Duration(seconds: 30);
+  HomeDashboard? _dashboardCache;
+  String? _dashboardCacheUid;
+  DateTime? _dashboardCacheExpiresAt;
+  Future<HomeDashboard>? _dashboardRequest;
+  String? _dashboardRequestUid;
+  int _dashboardCacheGeneration = 0;
+  bool _listeningForTokenRefresh = false;
+
+  void invalidateDashboardCache() {
+    _dashboardCacheGeneration += 1;
+    _dashboardCache = null;
+    _dashboardCacheUid = null;
+    _dashboardCacheExpiresAt = null;
+    _dashboardRequest = null;
+    _dashboardRequestUid = null;
+  }
 
   Future<User> ensureAnonymousUser() async =>
       _auth.currentUser ?? (await _auth.signInAnonymously()).user!;
@@ -68,6 +137,7 @@ class MeetupRepository {
     await _functions
         .httpsCallable('saveProfile')
         .call({'displayName': displayName});
+    invalidateDashboardCache();
   }
 
   Future<String> createMeetup(
@@ -110,6 +180,7 @@ class MeetupRepository {
     });
     final meetupId =
         Map<String, dynamic>.from(result.data as Map)['meetupId'] as String;
+    invalidateDashboardCache();
     AppAnalytics.log('meetup_created');
     return meetupId;
   }
@@ -132,6 +203,7 @@ class MeetupRepository {
     await _functions
         .httpsCallable('joinMeetup')
         .call({'meetupId': meetupId, 'displayName': displayName});
+    invalidateDashboardCache();
     AppAnalytics.log('meetup_joined');
   }
 
@@ -148,6 +220,7 @@ class MeetupRepository {
       'meetupId': meetupId,
       'startDateTime': startDateTime.toUtc().toIso8601String(),
     });
+    invalidateDashboardCache();
   }
 
   Future<void> toggleContentVote(
@@ -236,14 +309,22 @@ class MeetupRepository {
         'status': status.name,
       });
 
-  Future<void> completeMeetup(String meetupId) =>
-      _functions.httpsCallable('completeMeetup').call({'meetupId': meetupId});
+  Future<void> completeMeetup(String meetupId) async {
+    await _functions
+        .httpsCallable('completeMeetup')
+        .call({'meetupId': meetupId});
+    invalidateDashboardCache();
+  }
 
-  Future<void> cancelMeetup(String meetupId) =>
-      _functions.httpsCallable('cancelMeetup').call({'meetupId': meetupId});
+  Future<void> cancelMeetup(String meetupId) async {
+    await _functions.httpsCallable('cancelMeetup').call({'meetupId': meetupId});
+    invalidateDashboardCache();
+  }
 
-  Future<void> deleteMeetup(String meetupId) =>
-      _functions.httpsCallable('deleteMeetup').call({'meetupId': meetupId});
+  Future<void> deleteMeetup(String meetupId) async {
+    await _functions.httpsCallable('deleteMeetup').call({'meetupId': meetupId});
+    invalidateDashboardCache();
+  }
 
   Future<Recommendation> recommendation(String meetupId) async {
     await ensureAnonymousUser();
@@ -289,6 +370,7 @@ class MeetupRepository {
         otherUid: data['otherUid'] as String,
         displayName: data['displayName'] as String,
         completedMeetupCount: (data['completedMeetupCount'] as num).toInt(),
+        stops: _travelStops(data['stops']),
         meetups: (data['meetups'] as List<dynamic>).map((item) {
           final value = Map<String, dynamic>.from(item as Map);
           return DashboardMeetup(
@@ -310,10 +392,24 @@ class MeetupRepository {
         }).toList());
   }
 
+  Future<TravelTimeline> travelTimeline() async {
+    final result = await _functions.httpsCallable('getMyTravelTimeline').call();
+    final data = Map<String, dynamic>.from(result.data as Map);
+    final summary = Map<String, dynamic>.from(data['summary'] as Map);
+    return TravelTimeline(
+        stops: _travelStops(data['stops']),
+        summary: TravelTimelineSummary(
+            completedMeetupCount:
+                (summary['completedMeetupCount'] as num).toInt(),
+            uniquePlaceCount: (summary['uniquePlaceCount'] as num).toInt(),
+            totalStops: (summary['totalStops'] as num).toInt()));
+  }
+
   Future<void> confirmSchedule(String meetupId, String slotId) async {
     await _functions
         .httpsCallable('confirmSchedule')
         .call({'meetupId': meetupId, 'slotId': slotId});
+    invalidateDashboardCache();
     AppAnalytics.log('schedule_confirmed');
   }
 
@@ -323,6 +419,7 @@ class MeetupRepository {
       'meetupId': meetupId,
       'confirmedDateTime': confirmedDateTime.toUtc().toIso8601String(),
     });
+    invalidateDashboardCache();
     AppAnalytics.log('schedule_updated');
   }
 
@@ -365,6 +462,7 @@ class MeetupRepository {
     await _functions
         .httpsCallable('confirmMeetingPlace')
         .call({'meetupId': meetupId, 'meetingPlace': _locationMap(place)});
+    invalidateDashboardCache();
     AppAnalytics.log('meeting_place_confirmed');
   }
 
@@ -384,6 +482,61 @@ class MeetupRepository {
     await _functions
         .httpsCallable('registerDeviceToken')
         .call({'meetupId': meetupId, 'token': token});
+  }
+
+  Future<void> setMeetupReminders(String meetupId,
+      {required bool enabled, required String locale}) async {
+    String? token;
+    if (enabled) {
+      final settings = await FirebaseMessaging.instance
+          .requestPermission(alert: true, badge: true, sound: true);
+      if (settings.authorizationStatus == AuthorizationStatus.denied) {
+        throw StateError('알림 권한이 꺼져 있어요. 기기 설정에서 알림을 허용해 주세요.');
+      }
+      await FirebaseMessaging.instance.setAutoInitEnabled(true);
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
+              alert: true, badge: true, sound: true);
+      _startTokenRefreshListener();
+      for (var attempt = 0; attempt < 6 && token == null; attempt += 1) {
+        try {
+          token = await FirebaseMessaging.instance.getToken();
+        } catch (_) {
+          // APNs registration can finish shortly after the permission dialog.
+        }
+        if (token == null) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
+      }
+      if (token == null || token.isEmpty) {
+        throw StateError('이 기기의 알림 토큰을 가져오지 못했어요. 잠시 후 다시 시도해 주세요.');
+      }
+    }
+    await _functions.httpsCallable('setMeetupReminderPreference').call({
+      'meetupId': meetupId,
+      'enabled': enabled,
+      'locale': locale == 'ko' ? 'ko' : 'ja',
+      if (token != null) 'token': token,
+      'platform': _notificationPlatform,
+    });
+  }
+
+  String get _notificationPlatform =>
+      defaultTargetPlatform == TargetPlatform.android ? 'android' : 'ios';
+
+  void _startTokenRefreshListener() {
+    if (_listeningForTokenRefresh) return;
+    _listeningForTokenRefresh = true;
+    FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+      if (_auth.currentUser == null) return;
+      try {
+        await _functions
+            .httpsCallable('registerPushToken')
+            .call({'token': token, 'platform': _notificationPlatform});
+      } catch (_) {
+        // A later refresh or reminder toggle retries registration.
+      }
+    });
   }
 
   Future<void> createExpense(String meetupId,
@@ -454,6 +607,7 @@ class MeetupRepository {
         .httpsCallable('createRoom')
         .call({'name': name, 'displayName': displayName});
     final data = Map<String, dynamic>.from(result.data as Map);
+    invalidateDashboardCache();
     AppAnalytics.log('room_created');
     return Room(
         id: data['roomId'] as String,
@@ -481,6 +635,7 @@ class MeetupRepository {
         .call({'inviteCode': inviteCode, 'displayName': displayName});
     final roomId =
         Map<String, dynamic>.from(result.data as Map)['roomId'] as String;
+    invalidateDashboardCache();
     AppAnalytics.log('room_joined');
     return roomId;
   }
@@ -555,57 +710,48 @@ class MeetupRepository {
             .toList());
   }
 
-  Future<void> deleteRoom(String roomId) =>
-      _functions.httpsCallable('deleteRoom').call({'roomId': roomId});
+  Future<void> deleteRoom(String roomId) async {
+    await _functions.httpsCallable('deleteRoom').call({'roomId': roomId});
+    invalidateDashboardCache();
+  }
 
-  Future<HomeDashboard> myDashboard() async {
+  Future<HomeDashboard> myDashboard({bool force = false}) async {
+    final uid = (await ensureAnonymousUser()).uid;
+    final now = DateTime.now();
+    if (!force &&
+        _dashboardCacheUid == uid &&
+        _dashboardCache != null &&
+        (_dashboardCacheExpiresAt?.isAfter(now) ?? false)) {
+      return _dashboardCache!;
+    }
+    if (!force && _dashboardRequestUid == uid && _dashboardRequest != null) {
+      return _dashboardRequest!;
+    }
+
+    final generation = _dashboardCacheGeneration;
+    final request = _loadDashboard();
+    _dashboardRequest = request;
+    _dashboardRequestUid = uid;
+    try {
+      final dashboard = await request;
+      if (generation == _dashboardCacheGeneration) {
+        _dashboardCache = dashboard;
+        _dashboardCacheUid = uid;
+        _dashboardCacheExpiresAt = now.add(_dashboardCacheDuration);
+      }
+      return dashboard;
+    } finally {
+      if (identical(_dashboardRequest, request)) {
+        _dashboardRequest = null;
+        _dashboardRequestUid = null;
+      }
+    }
+  }
+
+  Future<HomeDashboard> _loadDashboard() async {
     final result = await _functions.httpsCallable('getMyDashboard').call();
     final data = Map<String, dynamic>.from(result.data as Map);
-    final summary = Map<String, dynamic>.from(data['summary'] as Map);
-    return HomeDashboard(
-        displayName: data['displayName'] as String,
-        meetups: (data['meetups'] as List<dynamic>).map((item) {
-          final value = Map<String, dynamic>.from(item as Map);
-          return DashboardMeetup(
-              id: value['id'] as String,
-              title: value['title'] as String,
-              status: value['status'] as String,
-              candidateDateTimes:
-                  (value['candidateDateTimes'] as List<dynamic>? ?? const [])
-                      .map((date) => DateTime.parse(date as String).toLocal())
-                      .toList(),
-              isOwner: value['isOwner'] as bool? ?? false,
-              confirmedDateTime: _isoDate(value['confirmedDateTime']),
-              completedAt: _isoDate(value['completedAt']),
-              meetingPlace: value['meetingPlace'] == null
-                  ? null
-                  : _location(
-                      Map<String, dynamic>.from(value['meetingPlace'] as Map)),
-              roomId: value['roomId'] as String?,
-              roomName: value['roomName'] as String?);
-        }).toList(),
-        relationships: (data['relationships'] as List<dynamic>)
-            .map(
-                (item) => _relationship(Map<String, dynamic>.from(item as Map)))
-            .toList(),
-        rooms: (data['rooms'] as List<dynamic>).map((item) {
-          final value = Map<String, dynamic>.from(item as Map);
-          return DashboardRoom(
-              id: value['id'] as String,
-              name: value['name'] as String,
-              inviteCode: value['inviteCode'] as String,
-              role: value['role'] as String,
-              completedMeetupCount:
-                  (value['completedMeetupCount'] as num).toInt(),
-              nextMeetupDate: _isoDate(value['nextMeetupDate']));
-        }).toList(),
-        summary: DashboardSummary(
-            upcomingMeetupCount:
-                (summary['upcomingMeetupCount'] as num).toInt(),
-            completedMeetupCount:
-                (summary['completedMeetupCount'] as num).toInt(),
-            friendCount: (summary['friendCount'] as num).toInt(),
-            groupCount: (summary['groupCount'] as num).toInt()));
+    return mapHomeDashboard(data);
   }
 
   Stream<MeetupDetail> watchMeetup(String meetupId) {
@@ -666,7 +812,8 @@ class MeetupRepository {
                   item['confirmedScheduleAvailability'] == null
                       ? null
                       : VoteStatusValue.fromValue(
-                          item['confirmedScheduleAvailability'] as String));
+                          item['confirmedScheduleAvailability'] as String),
+              remindersEnabled: item['remindersEnabled'] as bool? ?? false);
         }).toList(),
         candidateSlots: slotsSnapshot.docs.map((doc) {
           final item = doc.data();
@@ -821,6 +968,17 @@ class MeetupRepository {
           : DateTime.parse(value as String);
   DateTime? _isoDate(dynamic value) =>
       value is String ? DateTime.parse(value).toLocal() : null;
+  List<TravelTimelineStop> _travelStops(dynamic value) =>
+      (value as List<dynamic>? ?? const []).map((item) {
+        final data = Map<String, dynamic>.from(item as Map);
+        return TravelTimelineStop(
+            id: data['id'] as String,
+            meetupId: data['meetupId'] as String,
+            title: data['title'] as String,
+            visitedAt: DateTime.parse(data['visitedAt'] as String).toLocal(),
+            sequence: (data['sequence'] as num).toInt(),
+            place: _location(Map<String, dynamic>.from(data['place'] as Map)));
+      }).toList();
 }
 
 /// Emits a combined value whenever the meetup document or a child collection

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
 import '../../models/meetup.dart';
+import '../../presentation/meetup_presentation.dart';
 import '../../providers/meetup_providers.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
@@ -91,6 +92,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       final room = await ref.read(meetupRepositoryProvider).createRoom(
           _roomName.text.trim(), _name.isNotEmpty ? _name : 'aimasho user');
+      ref.invalidate(dashboardProvider);
       if (mounted) context.push('/rooms/${room.id}');
     } catch (error) {
       if (mounted)
@@ -107,6 +109,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       final roomId = await ref.read(meetupRepositoryProvider).joinRoom(
           _invite.text.trim(), _name.isNotEmpty ? _name : 'aimasho user');
+      ref.invalidate(dashboardProvider);
       if (mounted) context.push('/rooms/$roomId');
     } catch (error) {
       if (mounted)
@@ -221,7 +224,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       contentPadding: EdgeInsets.zero,
                       leading: CircleAvatar(
                           backgroundColor: const Color(0xFFFFE5D6),
-                          child: Text(relationship.displayName.substring(0, 1),
+                          child: Text(displayInitial(relationship.displayName),
                               style: const TextStyle(
                                   color: AimashoColors.coral,
                                   fontWeight: FontWeight.w800))),
@@ -230,7 +233,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       subtitle:
                           Text('함께한 약속 ${relationship.sharedMeetupCount}회'),
                       trailing: Text(
-                          _relationshipLabel(relationship.sharedMeetupCount),
+                          relationshipLabel(relationship.sharedMeetupCount),
                           style: const TextStyle(
                               color: AimashoColors.coral,
                               fontSize: 11,
@@ -328,11 +331,4 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     child: const Text('Room 참여하기'))
               ]
             ]));
-}
-
-String _relationshipLabel(int sharedMeetupCount) {
-  if (sharedMeetupCount >= 8) return '찐친';
-  if (sharedMeetupCount >= 4) return '자주 만나는 친구';
-  if (sharedMeetupCount >= 2) return '함께 만나는 사이';
-  return '새로운 친구';
 }

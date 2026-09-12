@@ -37,4 +37,25 @@ void main() {
     expect(disabled.isEnabled, isFalse);
     expect(enabled.isEnabled, isTrue);
   });
+
+  test('schedule editing closes after the response deadline', () {
+    final now = DateTime(2026, 9, 1, 12);
+    final open = Meetup(
+        id: 'open',
+        title: 'open',
+        createdByUid: 'host',
+        status: 'SCHEDULING',
+        durationMinutes: 120,
+        responseDeadline: now.add(const Duration(minutes: 1)));
+    final closed = Meetup(
+        id: 'closed',
+        title: 'closed',
+        createdByUid: 'host',
+        status: 'SCHEDULING',
+        durationMinutes: 120,
+        responseDeadline: now.subtract(const Duration(minutes: 1)));
+
+    expect(open.canEditScheduleAt(now), isTrue);
+    expect(closed.canEditScheduleAt(now), isFalse);
+  });
 }

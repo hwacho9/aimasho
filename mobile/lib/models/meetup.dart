@@ -59,6 +59,12 @@ class Meetup {
   final bool allowPlanEditing;
   bool get isConfirmed => status != 'SCHEDULING';
   bool get isFinished => status == 'COMPLETED' || status == 'CANCELLED';
+
+  bool canEditScheduleAt(DateTime now) =>
+      !isFinished &&
+      (isConfirmed ||
+          responseDeadline == null ||
+          responseDeadline!.isAfter(now));
 }
 
 class Participant {
@@ -69,7 +75,8 @@ class Participant {
       required this.isHost,
       this.hasOrigin = false,
       this.originArea,
-      this.confirmedScheduleAvailability});
+      this.confirmedScheduleAvailability,
+      this.remindersEnabled = false});
   final String uid;
   final String displayName;
   final bool isGuest;
@@ -77,6 +84,7 @@ class Participant {
   final bool hasOrigin;
   final String? originArea;
   final VoteStatus? confirmedScheduleAvailability;
+  final bool remindersEnabled;
 }
 
 class RelationshipStat {
@@ -521,14 +529,48 @@ class HomeDashboard {
   final DashboardSummary summary;
 }
 
+class TravelTimelineStop {
+  const TravelTimelineStop(
+      {required this.id,
+      required this.meetupId,
+      required this.title,
+      required this.visitedAt,
+      required this.sequence,
+      required this.place});
+  final String id;
+  final String meetupId;
+  final String title;
+  final DateTime visitedAt;
+  final int sequence;
+  final Location place;
+}
+
+class TravelTimelineSummary {
+  const TravelTimelineSummary(
+      {required this.completedMeetupCount,
+      required this.uniquePlaceCount,
+      required this.totalStops});
+  final int completedMeetupCount;
+  final int uniquePlaceCount;
+  final int totalStops;
+}
+
+class TravelTimeline {
+  const TravelTimeline({required this.stops, required this.summary});
+  final List<TravelTimelineStop> stops;
+  final TravelTimelineSummary summary;
+}
+
 class FriendHistory {
   const FriendHistory(
       {required this.otherUid,
       required this.displayName,
       required this.completedMeetupCount,
-      required this.meetups});
+      required this.meetups,
+      this.stops = const []});
   final String otherUid;
   final String displayName;
   final int completedMeetupCount;
   final List<DashboardMeetup> meetups;
+  final List<TravelTimelineStop> stops;
 }

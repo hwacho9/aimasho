@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../features/configuration/configuration_required_screen.dart';
 import '../features/friends/friend_history_screen.dart';
 import '../features/home/home_screen.dart';
+import '../features/journey/journey_screen.dart';
 import '../features/meetup/create_meetup_screen.dart';
 import '../features/meetup/meetup_screen.dart';
 import '../features/meetup/join_meetup_screen.dart';
@@ -45,7 +46,8 @@ class AimashoApp extends ConsumerWidget {
               name: 'new_meetup',
               path: '/new',
               builder: (_, state) => CreateMeetupScreen(
-                  roomId: state.uri.queryParameters['roomId'])),
+                  roomId: state.uri.queryParameters['roomId'],
+                  template: state.uri.queryParameters['template'] ?? 'free')),
           GoRoute(
               name: 'meetup_invite',
               path: '/m/:meetupId',
@@ -65,6 +67,10 @@ class AimashoApp extends ConsumerWidget {
               path: '/friends/:otherUid',
               builder: (_, state) => FriendHistoryScreen(
                   otherUid: state.pathParameters['otherUid']!)),
+          GoRoute(
+              name: 'journey',
+              path: '/journey',
+              builder: (_, __) => const JourneyScreen()),
           GoRoute(
               name: 'room',
               path: '/rooms/:roomId',
