@@ -1,7 +1,8 @@
-import type { Location, RouteMatrixResult, RouteResult } from "./models.js";
+import type { Location, PlaceDetails, RouteMatrixResult, RouteResult } from "./models.js";
 
 export interface MapsProvider {
   searchPlaces(query: string, near?: Pick<Location, "latitude" | "longitude">): Promise<Location[]>;
+  getPlaceDetails(placeId: string): Promise<PlaceDetails>;
   candidatePlaces(near: Pick<Location, "latitude" | "longitude">): Promise<Location[]>;
   /** Calculates a transit route that arrives by the requested time. */
   calculateRoute(origin: Location, destination: Location, arrivalTime?: Date): Promise<RouteResult>;
@@ -35,6 +36,22 @@ export class MockMapsProvider implements MapsProvider {
     if (!normalized) return mockLocations.slice(0, 6);
     const matches = mockLocations.filter((location) => `${location.name} ${location.address}`.toLowerCase().includes(normalized));
     return matches.length > 0 ? matches : mockLocations.slice(0, 6);
+  }
+
+  async getPlaceDetails(placeId: string): Promise<PlaceDetails> {
+    const location = mockLocations.find((item) => item.placeId === placeId)
+      ?? { placeId, name: "選択した場所", address: "東京都" };
+    return {
+      ...location,
+      category: "カフェ・レストラン",
+      rating: 4.2,
+      ratingCount: 128,
+      priceLevel: "PRICE_LEVEL_MODERATE",
+      openNow: true,
+      weekdayDescriptions: ["月曜日: 10:00～22:00", "火曜日: 10:00～22:00"],
+      phoneNumber: "03-0000-0000",
+      websiteUri: "https://example.test/venue",
+    };
   }
 
   async candidatePlaces(near: Pick<Location, "latitude" | "longitude">): Promise<Location[]> {
@@ -86,6 +103,48 @@ class GoogleMapsProvider implements MapsProvider {
     if (!response.ok) throw new Error(`Google Places request failed (${response.status}).`);
     const payload = await response.json() as { places?: Array<{ id: string; displayName?: { text?: string }; formattedAddress?: string; location?: { latitude?: number; longitude?: number } }> };
     return (payload.places ?? []).flatMap((place) => place.location?.latitude !== undefined && place.location.longitude !== undefined ? [{ placeId: place.id, name: place.displayName?.text ?? place.formattedAddress ?? "Unknown place", address: place.formattedAddress, latitude: place.location.latitude, longitude: place.location.longitude }] : []);
+  }
+
+  async getPlaceDetails(placeId: string): Promise<PlaceDetails> {
+    const normalizedId = placeId.replace(/^places\//, "");
+    const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(normalizedId)}?languageCode=ja&regionCode=JP`, {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": this.apiKey,
+        // Keep the request focused on useful venue information. Do not request
+        // reviews, photos or broad fields whose cost and retention rules differ.
+        "X-Goog-FieldMask": "id,displayName,formattedAddress,primaryTypeDisplayName,rating,userRatingCount,priceLevel,currentOpeningHours.openNow,regularOpeningHours.weekdayDescriptions,nationalPhoneNumber,websiteUri,googleMapsUri",
+      },
+    });
+    if (!response.ok) throw new Error(`Google Places details request failed (${response.status}).`);
+    const place = await response.json() as {
+      id?: string;
+      displayName?: { text?: string };
+      formattedAddress?: string;
+      primaryTypeDisplayName?: { text?: string };
+      rating?: number;
+      userRatingCount?: number;
+      priceLevel?: string;
+      currentOpeningHours?: { openNow?: boolean };
+      regularOpeningHours?: { weekdayDescriptions?: string[] };
+      nationalPhoneNumber?: string;
+      websiteUri?: string;
+      googleMapsUri?: string;
+    };
+    return {
+      placeId: place.id ?? normalizedId,
+      name: place.displayName?.text ?? "選択した場所",
+      ...(place.formattedAddress ? { address: place.formattedAddress } : {}),
+      ...(place.primaryTypeDisplayName?.text ? { category: place.primaryTypeDisplayName.text } : {}),
+      ...(typeof place.rating === "number" ? { rating: place.rating } : {}),
+      ...(typeof place.userRatingCount === "number" ? { ratingCount: place.userRatingCount } : {}),
+      ...(place.priceLevel ? { priceLevel: place.priceLevel } : {}),
+      ...(typeof place.currentOpeningHours?.openNow === "boolean" ? { openNow: place.currentOpeningHours.openNow } : {}),
+      ...(place.regularOpeningHours?.weekdayDescriptions?.length ? { weekdayDescriptions: place.regularOpeningHours.weekdayDescriptions.slice(0, 7) } : {}),
+      ...(place.nationalPhoneNumber ? { phoneNumber: place.nationalPhoneNumber } : {}),
+      ...(place.websiteUri ? { websiteUri: place.websiteUri } : {}),
+      ...(place.googleMapsUri ? { googleMapsUri: place.googleMapsUri } : {}),
+    };
   }
 
   async candidatePlaces(near: Pick<Location, "latitude" | "longitude">): Promise<Location[]> {

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/configuration/configuration_required_screen.dart';
+import '../features/friends/friend_history_screen.dart';
 import '../features/home/home_screen.dart';
+import '../features/journey/journey_screen.dart';
 import '../features/meetup/create_meetup_screen.dart';
 import '../features/meetup/meetup_screen.dart';
 import '../features/meetup/join_meetup_screen.dart';
@@ -29,29 +32,52 @@ class AimashoApp extends ConsumerWidget {
 
   GoRouter _router(bool firebaseReady) => GoRouter(
         initialLocation: firebaseReady ? '/' : '/configuration',
+        observers: firebaseReady
+            ? [FirebaseAnalyticsObserver(analytics: FirebaseAnalytics.instance)]
+            : const [],
         routes: [
           GoRoute(
+              name: 'configuration',
               path: '/configuration',
               builder: (_, __) => const ConfigurationRequiredScreen()),
-          GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
           GoRoute(
+              name: 'home', path: '/', builder: (_, __) => const HomeScreen()),
+          GoRoute(
+              name: 'new_meetup',
               path: '/new',
               builder: (_, state) => CreateMeetupScreen(
-                  roomId: state.uri.queryParameters['roomId'])),
+                  roomId: state.uri.queryParameters['roomId'],
+                  template: state.uri.queryParameters['template'] ?? 'free')),
           GoRoute(
+              name: 'meetup_invite',
               path: '/m/:meetupId',
               builder: (_, state) => JoinMeetupScreen(
                   meetupId: state.pathParameters['meetupId']!)),
           GoRoute(
+              name: 'meetup_plan',
               path: '/m/:meetupId/plan',
               builder: (_, state) =>
                   MeetupScreen(meetupId: state.pathParameters['meetupId']!)),
-          GoRoute(path: '/profile', builder: (_, __) => const ProfileScreen()),
           GoRoute(
+              name: 'profile',
+              path: '/profile',
+              builder: (_, __) => const ProfileScreen()),
+          GoRoute(
+              name: 'friend_history',
+              path: '/friends/:otherUid',
+              builder: (_, state) => FriendHistoryScreen(
+                  otherUid: state.pathParameters['otherUid']!)),
+          GoRoute(
+              name: 'journey',
+              path: '/journey',
+              builder: (_, __) => const JourneyScreen()),
+          GoRoute(
+              name: 'room',
               path: '/rooms/:roomId',
               builder: (_, state) =>
                   RoomScreen(roomId: state.pathParameters['roomId']!)),
           GoRoute(
+              name: 'room_invite',
               path: '/r/:inviteCode',
               builder: (_, state) => JoinRoomScreen(
                   inviteCode: state.pathParameters['inviteCode']!)),

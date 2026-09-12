@@ -117,6 +117,23 @@ export interface Location {
   longitude: number;
 }
 
+/** Fresh public venue metadata returned on demand. It is not stored in a plan
+ * because business information such as hours and ratings changes over time. */
+export interface PlaceDetails {
+  placeId: string;
+  name: string;
+  address?: string;
+  category?: string;
+  rating?: number;
+  ratingCount?: number;
+  priceLevel?: string;
+  openNow?: boolean;
+  weekdayDescriptions?: string[];
+  phoneNumber?: string;
+  websiteUri?: string;
+  googleMapsUri?: string;
+}
+
 export interface ParticipantRoute {
   participantUid: string;
   /** Chosen origin name, shared with participants only after route calculation. */
@@ -238,6 +255,24 @@ export interface PlaceVisit {
   meetupIds: string[];
 }
 
+export interface TravelTimelineStop {
+  id: string;
+  meetupId: string;
+  title: string;
+  visitedAt: string;
+  sequence: number;
+  place: Location;
+}
+
+export interface TravelTimelineData {
+  stops: TravelTimelineStop[];
+  summary: {
+    completedMeetupCount: number;
+    uniquePlaceCount: number;
+    totalStops: number;
+  };
+}
+
 export interface RoomDetailData {
   room: { id: string; name: string; inviteCode: string; ownerUid: string };
   members: Array<{ uid: string; displayName: string; role: "OWNER" | "MEMBER" }>;
@@ -251,4 +286,5 @@ export interface FriendHistory {
   displayName: string;
   completedMeetupCount: number;
   meetups: HistoryMeetup[];
+  stops: TravelTimelineStop[];
 }

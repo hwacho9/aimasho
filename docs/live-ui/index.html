@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>Aimasho Live UI</title>
+  <style>
+    :root {
+      --ink: #302725;
+      --muted: #665c57;
+      --paper: #fffaf4;
+      --surface: #fffefb;
+      --peach: #ffd8c4;
+      --coral: #ec654b;
+      --coral-dark: #cf4c35;
+      --line: #dfd1c7;
+      --green: #348f5d;
+      --yellow: #bd7b12;
+      --red: #c95146;
+      --doc-bg: #eee7e0;
+      --panel: #f8f3ed;
+      --shadow: 0 22px 60px rgba(65, 43, 34, .12);
+      --preview-scale: 1;
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--doc-bg); }
+    body { margin: 0; color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Noto Sans KR", "Noto Sans JP", "Hiragino Sans", Arial, sans-serif; }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    [hidden] { display: none !important; }
+
+    .docs-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template: 72px 1fr / 264px minmax(0, 1fr) 292px;
+      background: var(--doc-bg);
+    }
+
+    .docs-topbar {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 264px minmax(0, 1fr) 292px;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(255, 250, 244, .94);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .docs-brand { height: 100%; display: flex; align-items: center; gap: 11px; padding: 0 22px; border-right: 1px solid var(--line); }
+    .brand-mark { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 12px; color: white; background: var(--coral); font-weight: 900; box-shadow: 0 4px 0 #bd4534; }
+    .docs-brand div { display: flex; flex-direction: column; }
+    .docs-brand b { font-size: 15px; letter-spacing: -.3px; }
+    .docs-brand span { color: var(--muted); font-size: 12px; }
+
+    .view-tabs { display: flex; align-items: center; gap: 4px; padding: 0 20px; overflow-x: auto; }
+    .view-tab, .platform-tab, .icon-button {
+      border: 0;
+      background: transparent;
+      border-radius: 11px;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+    .view-tab { padding: 10px 14px; color: var(--muted); font-size: 14px; font-weight: 750; white-space: nowrap; }
+    .view-tab:hover, .view-tab.active { color: var(--coral-dark); background: #fff0e9; }
+    .top-actions { height: 100%; padding: 0 18px; border-left: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+    .search { width: 100%; height: 40px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 12px; background: white; padding: 0 12px; }
+    .search span { color: #8e817a; }
+    .search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 14px; }
+
+    .screen-nav { grid-row: 2; position: sticky; top: 72px; height: calc(100vh - 72px); overflow-y: auto; padding: 22px 14px 36px; background: var(--paper); border-right: 1px solid var(--line); }
+    .platform-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; background: #eee5de; border-radius: 12px; padding: 4px; margin: 0 4px 22px; }
+    .platform-tab { padding: 8px 5px; font-size: 12px; font-weight: 800; color: var(--muted); }
+    .platform-tab.active { color: var(--coral-dark); background: white; box-shadow: 0 2px 8px rgba(55, 38, 30, .08); }
+    .nav-group { margin-top: 22px; }
+    .nav-group-title { margin: 0 10px 8px; color: #9a8c84; font-size: 12px; font-weight: 900; letter-spacing: .08em; }
+    .screen-link { width: 100%; display: grid; grid-template-columns: 30px 1fr auto; gap: 9px; align-items: center; padding: 9px 10px; border: 0; border-radius: 12px; background: transparent; text-align: left; cursor: pointer; }
+    .screen-link:hover { background: #f7eee7; }
+    .screen-link.active { background: #fff0e9; color: var(--coral-dark); }
+    .screen-link .nav-icon { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid #eadfd6; border-radius: 9px; background: white; font-size: 12px; }
+    .screen-link strong { display: block; font-size: 13px; }
+    .screen-link small { display: block; margin-top: 1px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .screen-link em { color: #a3938b; font-size: 13px; font-style: normal; }
+
+    .docs-main { grid-column: 2; grid-row: 2; min-width: 0; padding: 28px 30px 50px; }
+    .workspace-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin: 0 auto 22px; max-width: 1480px; }
+    .workspace-heading .eyebrow { margin: 0 0 6px; color: var(--coral); font-size: 12px; font-weight: 900; letter-spacing: .12em; }
+    .workspace-heading h1 { margin: 0; font-size: clamp(24px, 3vw, 36px); letter-spacing: -.04em; }
+    .workspace-heading p { max-width: 720px; margin: 8px 0 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+    .workspace-controls { display: flex; gap: 7px; flex: none; }
+    .icon-button { min-width: 40px; height: 40px; border: 1px solid var(--line); background: white; font-size: 14px; font-weight: 800; }
+    .icon-button:hover { border-color: #f1a18b; color: var(--coral-dark); }
+
+    .overview-grid { max-width: 1480px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+    .screen-card { overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 10px 30px rgba(61, 42, 34, .07); cursor: pointer; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+    .screen-card:hover { transform: translateY(-4px); border-color: #f0a18d; box-shadow: 0 18px 42px rgba(61, 42, 34, .12); }
+    .screen-card-preview { position: relative; height: 202px; overflow: hidden; background: #e4d9cf; border-bottom: 1px solid var(--line); }
+    .screen-card-preview .device-screen { pointer-events: none; transform-origin: 0 0; }
+    .screen-card-preview.web .device-screen { width: 1180px; height: 720px; left: 50%; transform: translateX(-50%) scale(.285); transform-origin: top center; }
+    .screen-card-preview.mobile .device-screen { width: 390px; height: 844px; left: 50%; transform: translateX(-50%) scale(.225); transform-origin: top center; border: 12px solid var(--ink); border-radius: 42px; }
+    .card-copy { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 15px 16px 17px; }
+    .card-copy h2 { margin: 0; font-size: 16px; }
+    .card-copy p { grid-column: 1; margin: 4px 0 0; overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .route-pill { align-self: start; max-width: 115px; overflow: hidden; border: 1px solid var(--line); border-radius: 99px; background: var(--paper); padding: 5px 8px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+    .prototype-stage { max-width: 1480px; min-height: calc(100vh - 190px); margin: 0 auto; display: flex; align-items: flex-start; justify-content: center; overflow: auto; border: 1px solid #d4c8be; border-radius: 24px; background: #dcd2ca; background-image: radial-gradient(#c3b6ac 1px, transparent 1px); background-size: 22px 22px; padding: 42px; }
+    .device-wrap { position: relative; flex: none; transition: width .25s ease, height .25s ease; }
+    .device-screen { position: absolute; top: 0; left: 0; overflow: hidden; background: var(--paper); color: var(--ink); transform: scale(var(--preview-scale)); transform-origin: top left; box-shadow: var(--shadow); transition: opacity .18s ease, transform .22s ease; }
+    .device-screen.switching { opacity: 0; transform: scale(calc(var(--preview-scale) * .98)) translateY(12px); }
+    .device-screen.web { width: 1180px; height: 720px; border: 1px solid #d5c9c0; border-radius: 20px; }
+    .device-screen.mobile { width: 390px; height: 844px; border: 10px solid var(--ink); border-radius: 46px; }
+
+    .inspector { grid-column: 3; grid-row: 2; position: sticky; top: 72px; height: calc(100vh - 72px); overflow-y: auto; padding: 22px 20px 36px; background: var(--paper); border-left: 1px solid var(--line); }
+    .inspect-section { padding: 0 0 22px; margin-bottom: 22px; border-bottom: 1px solid var(--line); }
+    .inspect-section:last-child { border-bottom: 0; }
+    .inspect-label { margin: 0 0 10px; color: #9a8b83; font-size: 12px; font-weight: 900; letter-spacing: .08em; }
+    .inspect-section h2 { margin: 0 0 5px; font-size: 19px; }
+    .inspect-section p { margin: 7px 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .inspect-route { display: inline-block; max-width: 100%; overflow: hidden; border-radius: 8px; background: #eee5de; padding: 7px 9px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .transition-list, .source-list { display: flex; flex-direction: column; gap: 7px; }
+    .transition-link { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 11px; background: white; text-align: left; cursor: pointer; }
+    .transition-link:hover { border-color: #ef9a83; color: var(--coral-dark); }
+    .transition-link strong { font-size: 12px; }
+    .transition-link small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .source-list code { display: block; overflow-wrap: anywhere; border-radius: 9px; background: #eee5de; padding: 9px; color: #544844; font-size: 11px; line-height: 1.5; }
+    .key-hints { display: flex; flex-wrap: wrap; gap: 6px; }
+    .key-hints span { border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 7px; background: white; padding: 5px 7px; color: var(--muted); font-size: 11px; }
+
+    .flow-board { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+    .flow-lane { border: 1px solid var(--line); border-radius: 22px; background: rgba(255, 254, 251, .82); padding: 22px; }
+    .flow-lane-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+    .flow-lane-heading h2 { margin: 0; font-size: 18px; }
+    .flow-lane-heading span { color: var(--muted); font-size: 13px; }
+    .flow-track { display: flex; align-items: stretch; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+    .flow-node { width: 170px; flex: none; padding: 14px; border: 1px solid var(--line); border-radius: 15px; background: white; text-align: left; cursor: pointer; }
+    .flow-node:hover { border-color: #ef9a83; }
+    .flow-node small { color: var(--coral); font-size: 11px; font-weight: 900; }
+    .flow-node b { display: block; margin: 7px 0 3px; font-size: 14px; }
+    .flow-node span { display: block; overflow: hidden; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .flow-arrow { display: grid; place-items: center; flex: none; color: #9b8d85; font-size: 20px; }
+    .branch-note { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+
+    .tokens-board { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
+    .token-panel { border: 1px solid var(--line); border-radius: 22px; background: var(--surface); padding: 22px; }
+    .token-panel h2 { margin: 0 0 18px; font-size: 19px; }
+    .color-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+    .color-token { overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: white; }
+    .color-token i { display: block; height: 74px; }
+    .color-token div { padding: 10px; }
+    .color-token b, .color-token small { display: block; }
+    .color-token b { font-size: 13px; }
+    .color-token small { margin-top: 3px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .type-sample { padding: 15px 0; border-top: 1px solid var(--line); }
+    .type-sample:first-of-type { border-top: 0; }
+    .type-sample small { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+    .type-display { font-size: 38px; font-weight: 900; letter-spacing: -.05em; line-height: 1.15; }
+    .type-heading { font-size: 26px; font-weight: 850; letter-spacing: -.035em; }
+    .type-body { font-size: 16px; line-height: 1.7; }
+    .component-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+
+    .empty-state { max-width: 640px; margin: 90px auto; text-align: center; }
+    .empty-state span { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 20px; background: #fff0e9; color: var(--coral); font-size: 28px; }
+    .empty-state h2 { margin: 0; }
+    .empty-state p { color: var(--muted); }
+
+    /* Shared product preview UI */
+    .app-browser { height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: #e9dfd7; border-bottom: 1px solid #d9cdc4; color: #897b74; font-size: 8px; }
+    .app-browser i { width: 7px; height: 7px; border-radius: 50%; background: #c3b4aa; }
+    .app-browser i:first-child { background: #ed7b67; }
+    .app-browser span { margin-left: 8px; border-radius: 5px; background: #f7f0ea; padding: 3px 70px; }
+    .app-nav { height: 62px; display: flex; justify-content: space-between; align-items: center; padding: 0 52px; border-bottom: 1px solid #eadfd6; background: rgba(255, 250, 244, .96); }
+    .app-logo { display: flex; align-items: center; gap: 7px; font-size: 16px; font-weight: 900; }
+    .app-logo i { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 10px; background: var(--coral); color: white; font-style: normal; }
+    .app-nav-links { display: flex; align-items: center; gap: 18px; }
+    .app-nav-links button { border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
+    .app-nav-links .nav-cta { border: 1px solid var(--line); border-radius: 11px; background: white; padding: 9px 12px; color: var(--coral-dark); font-weight: 850; }
+    .preview-page { height: 630px; overflow: hidden; padding: 40px 62px; }
+    .preview-page.centered { display: grid; place-items: center; }
+    .preview-eyebrow { margin: 0; color: var(--coral); font-size: 10px; font-weight: 900; letter-spacing: .12em; }
+    .preview-title { margin: 7px 0 8px; font-size: 30px; line-height: 1.2; letter-spacing: -.04em; }
+    .preview-copy { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .app-primary, .app-secondary, .app-text-button { border: 0; cursor: pointer; font-weight: 850; }
+    .app-primary { border-radius: 14px; background: var(--coral); color: white; padding: 13px 18px; box-shadow: 0 5px 0 #bd4534; }
+    .app-secondary { border: 1px solid var(--line); border-radius: 14px; background: white; color: var(--coral-dark); padding: 12px 17px; }
+    .app-text-button { background: transparent; color: var(--coral); padding: 8px; }
+    .preview-card { border: 1px solid var(--line); border-radius: 19px; background: var(--surface); box-shadow: 0 14px 35px rgba(75, 46, 35, .06); }
+    .preview-field { margin-top: 13px; }
+    .preview-field span { display: block; margin-bottom: 6px; font-size: 10px; font-weight: 850; }
+    .preview-field div { height: 43px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 12px; background: white; padding: 0 12px; color: #958880; font-size: 10px; }
+    .app-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 99px; background: white; padding: 7px 10px; color: var(--muted); font-size: 9px; font-weight: 800; }
+    .app-chip.active { border-color: #f0b29f; background: #fff0e9; color: var(--coral-dark); }
+    .app-chip.green { border-color: #b7dec7; background: #edf8f1; color: var(--green); }
+    .status-pill { border-radius: 99px; background: #fff0e9; padding: 6px 9px; color: var(--coral-dark); font-size: 8px; font-weight: 900; }
+    .avatar-stack { display: flex; align-items: center; }
+    .avatar-stack i { width: 29px; height: 29px; display: grid; place-items: center; margin-left: -6px; border: 3px solid var(--surface); border-radius: 50%; background: var(--peach); font-size: 8px; font-style: normal; font-weight: 900; }
+
+    .guest-layout { height: 100%; display: grid; grid-template-columns: 1fr .9fr; gap: 58px; align-items: center; }
+    .guest-copy h1 { margin: 12px 0 18px; font-size: 50px; line-height: 1.08; letter-spacing: -.06em; }
+    .guest-copy h1 strong { color: var(--coral); }
+    .guest-copy > p:not(.preview-eyebrow) { color: var(--muted); font-size: 14px; line-height: 1.75; }
+    .guest-copy .app-primary { margin-top: 14px; }
+    .guest-copy small { display: block; margin-top: 15px; color: #8c7e77; font-size: 9px; }
+    .plan-preview { padding: 24px; box-shadow: 8px 8px 0 #f1e4da; }
+    .plan-preview h2 { margin: 12px 0 15px; font-size: 24px; }
+    .plan-step { display: grid; grid-template-columns: 38px 1fr; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid #eee3db; }
+    .plan-step > i { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 12px; background: #fff0e9; color: var(--coral); font-style: normal; font-weight: 900; }
+    .plan-step b, .plan-step small { display: block; }
+    .plan-step b { font-size: 12px; }
+    .plan-step small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+
+    .auth-card { width: 420px; padding: 32px; text-align: center; }
+    .auth-card .app-logo { justify-content: center; margin-bottom: 22px; }
+    .auth-card h1 { margin: 0 0 7px; font-size: 26px; }
+    .auth-card > p { margin: 0 0 22px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .auth-card .app-primary, .auth-card .app-secondary { width: 100%; margin-top: 10px; }
+    .auth-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 8px; color: #a1938b; font-size: 9px; }
+    .auth-divider::before, .auth-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+
+    .dash-head, .page-head { display: flex; justify-content: space-between; align-items: flex-start; }
+    .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; margin: 18px 0 13px; }
+    .summary-item { height: 78px; display: grid; grid-template-columns: 38px 1fr; grid-template-rows: 1fr 1fr; align-items: center; border-radius: 17px; padding: 13px; }
+    .summary-item i { grid-row: 1 / 3; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 11px; background: rgba(255, 255, 255, .55); font-style: normal; }
+    .summary-item b { align-self: end; font-size: 18px; }
+    .summary-item span { align-self: start; color: var(--muted); font-size: 8px; }
+    .tone-coral { background: #fff0e9; }.tone-green { background: #edf8f1; }.tone-yellow { background: #fff6dc; }.tone-rose { background: #faecef; }
+    .journey-banner { height: 66px; display: flex; align-items: center; gap: 12px; border-radius: 17px; background: var(--ink); padding: 11px 16px; color: white; cursor: pointer; }
+    .journey-banner > i { color: #ff9a82; font-size: 22px; font-style: normal; }
+    .journey-banner div { display: flex; flex-direction: column; flex: 1; }
+    .journey-banner small { color: #ff9a82; font-size: 7px; font-weight: 900; letter-spacing: .12em; }
+    .journey-banner b { font-size: 12px; }
+    .journey-banner span { color: #cdbfba; font-size: 8px; }
+    .next-card { height: 74px; display: flex; align-items: center; gap: 12px; margin: 12px 0; padding: 12px 15px; border-color: #f0b6a4; cursor: pointer; }
+    .next-card > i { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 13px; background: #fff0e9; color: var(--coral); font-style: normal; }
+    .next-card div { display: flex; flex-direction: column; flex: 1; }
+    .next-card small { color: var(--coral); font-size: 7px; }.next-card b { font-size: 12px; }.next-card span { color: var(--muted); font-size: 8px; }
+    .calendar-card { padding: 16px; }
+    .calendar-title { display: flex; justify-content: space-between; align-items: center; }
+    .calendar-title h2 { margin: 0; font-size: 15px; }
+    .calendar-title span { border-radius: 9px; background: #f1e7df; padding: 7px 10px; color: var(--coral-dark); font-size: 8px; font-weight: 850; }
+    .calendar-week { display: grid; grid-template-columns: repeat(7, 1fr); margin-top: 12px; }
+    .calendar-week b { padding: 5px; color: #897b74; font-size: 7px; text-align: center; }
+    .calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+    .calendar-days i { min-height: 28px; border-radius: 6px; padding: 3px; font-size: 7px; font-style: normal; }
+    .calendar-days .today { background: #fff0e9; color: var(--coral); font-weight: 900; }
+    .calendar-days .event { background: #fff7f3; }
+    .calendar-days .event::after { content: "약속"; display: block; margin-top: 2px; border-radius: 3px; background: var(--coral); padding: 2px; color: white; font-size: 5px; }
+
+    .form-layout { display: grid; grid-template-columns: 1.1fr .9fr; gap: 22px; }
+    .form-card, .guide-card, .join-card, .profile-main, .profile-side, .room-main, .room-side { padding: 22px; }
+    .form-card h2, .guide-card h2, .join-card h2 { margin: 4px 0 8px; font-size: 20px; }
+    .slot-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+    .slot-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 13px; background: white; padding: 10px; }
+    .slot-row i { color: var(--coral); font-size: 8px; font-style: normal; font-weight: 900; }
+    .slot-row b, .slot-row small { display: block; }.slot-row b { font-size: 10px; }.slot-row small { color: var(--muted); font-size: 8px; }
+    .slot-row span:last-child { color: #9b8e87; }
+    .form-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 17px; }
+    .guide-card { background: #302725; color: white; }
+    .guide-card p { color: #cfc2bc; font-size: 10px; line-height: 1.6; }
+    .guide-step { display: grid; grid-template-columns: 32px 1fr; gap: 10px; padding: 12px 0; border-top: 1px solid #514540; }
+    .guide-step i { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 10px; background: #4a3d39; color: #ff9a82; font-style: normal; }
+    .guide-step b, .guide-step small { display: block; }.guide-step b { font-size: 11px; }.guide-step small { color: #c7b9b4; font-size: 8px; }
+
+    .join-shell { width: 760px; display: grid; grid-template-columns: .9fr 1.1fr; overflow: hidden; }
+    .join-visual { min-height: 380px; padding: 28px; background: var(--ink); color: white; }
+    .join-visual h2 { margin: 12px 0; font-size: 29px; }.join-visual p { color: #cdbfba; font-size: 10px; line-height: 1.6; }
+    .join-date { margin-top: 40px; border-radius: 17px; background: #463936; padding: 16px; }
+    .join-date small, .join-date b, .join-date span { display: block; }.join-date small { color: #ff9d87; font-size: 8px; }.join-date b { margin: 6px 0; font-size: 17px; }.join-date span { color: #cdbfba; font-size: 9px; }
+    .join-card { display: flex; flex-direction: column; justify-content: center; border: 0; border-radius: 0; box-shadow: none; }
+    .join-card .app-primary { margin-top: 17px; }
+
+    .meetup-grid { display: grid; grid-template-columns: 1.35fr .75fr; gap: 14px; margin-top: 18px; }
+    .meetup-main { display: flex; flex-direction: column; gap: 12px; }
+    .vote-panel, .what-panel, .timeline-panel, .current-panel { padding: 18px; }
+    .panel-heading { display: flex; justify-content: space-between; align-items: flex-start; }
+    .panel-heading h2 { margin: 4px 0; font-size: 17px; }.panel-heading p { margin: 0; color: var(--muted); font-size: 8px; }
+    .date-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 13px; }
+    .date-card { border: 1px solid var(--line); border-radius: 14px; background: white; padding: 11px; text-align: center; }
+    .date-card.selected { border: 2px solid var(--coral); background: #fff7f3; }
+    .date-card small, .date-card b, .date-card em { display: block; }.date-card small { color: var(--muted); font-size: 7px; }.date-card b { margin: 3px 0; font-size: 16px; }.date-card em { color: var(--muted); font-size: 7px; font-style: normal; }
+    .vote-dots { display: flex; justify-content: center; margin: 8px 0; }.vote-dots i { width: 14px; height: 14px; margin-left: -3px; border: 2px solid white; border-radius: 50%; }.vote-dots .yes { background: var(--green); }.vote-dots .maybe { background: #e8a832; }.vote-dots .no { background: #dd6659; }
+    .choice-row { height: 46px; display: flex; align-items: center; gap: 9px; border-top: 1px solid #eee3db; }
+    .choice-check { width: 19px; height: 19px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; color: white; font-size: 8px; }
+    .choice-row.selected .choice-check { border-color: var(--coral); background: var(--coral); }
+    .choice-row div { display: flex; flex-direction: column; flex: 1; }.choice-row b { font-size: 10px; }.choice-row small { color: var(--muted); font-size: 7px; }.choice-row strong { color: var(--coral); font-size: 9px; }
+    .meetup-side { display: flex; flex-direction: column; gap: 12px; }.current-panel h2 { margin: 6px 0; font-size: 15px; }.current-panel > p { color: var(--muted); font-size: 8px; }
+    .app-progress { height: 5px; overflow: hidden; border-radius: 99px; background: #eee4dc; }.app-progress i { display: block; width: 66%; height: 100%; border-radius: 99px; background: var(--coral); }
+    .timeline-row { display: grid; grid-template-columns: 40px 1fr; gap: 9px; padding: 10px 0; border-top: 1px solid #eee3db; }.timeline-row > i { color: var(--coral); font-size: 8px; font-style: normal; font-weight: 900; }.timeline-row b, .timeline-row small { display: block; }.timeline-row b { font-size: 9px; }.timeline-row small { color: var(--muted); font-size: 7px; }
+
+    .room-grid, .profile-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 16px; margin-top: 18px; }
+    .member-row, .meetup-row, .friend-row { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid #eee3db; cursor: pointer; }
+    .person-avatar { width: 34px; height: 34px; display: grid; place-items: center; flex: none; border-radius: 50%; background: var(--peach); font-size: 9px; font-weight: 900; }
+    .member-row div, .meetup-row div, .friend-row div { display: flex; flex-direction: column; flex: 1; }.member-row b, .meetup-row b, .friend-row b { font-size: 10px; }.member-row small, .meetup-row small, .friend-row small { color: var(--muted); font-size: 8px; }
+    .room-code { border-radius: 14px; background: var(--ink); padding: 17px; color: white; }.room-code small { color: #ff9a82; font-size: 8px; }.room-code b { display: block; margin: 7px 0; font: 20px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .18em; }.room-code p { margin: 0; color: #cdbfba; font-size: 8px; }
+    .profile-hero { display: flex; align-items: center; gap: 16px; }.profile-avatar { width: 72px; height: 72px; display: grid; place-items: center; border-radius: 24px; background: var(--peach); color: var(--coral-dark); font-size: 24px; font-weight: 900; }.profile-hero h2 { margin: 0 0 4px; font-size: 22px; }.profile-hero p { margin: 0; color: var(--muted); font-size: 9px; }
+    .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 18px 0; }.stat-box { border-radius: 13px; background: #f7eee7; padding: 12px; }.stat-box b, .stat-box small { display: block; }.stat-box b { font-size: 18px; }.stat-box small { color: var(--muted); font-size: 7px; }
+    .memory-note { border-radius: 15px; background: #fff5dd; padding: 14px; }.memory-note small { color: var(--yellow); font-size: 8px; font-weight: 900; }.memory-note p { margin: 6px 0 0; font-size: 9px; line-height: 1.55; }
+
+    .journey-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 18px; margin-top: 17px; }
+    .map-panel { height: 430px; position: relative; overflow: hidden; border-radius: 22px; background: #eadfd5; border: 1px solid #d8cbc0; }
+    .map-lines { position: absolute; inset: -40px; background-image: linear-gradient(#d6c8bd 1px, transparent 1px), linear-gradient(90deg, #d6c8bd 1px, transparent 1px); background-size: 48px 48px; transform: rotate(-7deg); }
+    .map-water { position: absolute; width: 330px; height: 180px; right: -60px; bottom: -30px; border-radius: 50%; background: #d6e4e5; border: 3px solid #c6d7d9; }
+    .map-pin { position: absolute; width: 34px; height: 34px; display: grid; place-items: center; border: 3px solid white; border-radius: 50% 50% 50% 0; background: var(--coral); color: white; font-size: 9px; font-style: normal; font-weight: 900; transform: rotate(-45deg); }.pin-a { left: 80px; top: 120px; }.pin-b { left: 245px; top: 86px; }.pin-c { right: 80px; top: 225px; }
+    .map-caption { position: absolute; left: 18px; bottom: 18px; border-radius: 13px; background: rgba(48, 39, 37, .93); padding: 12px 15px; color: white; }.map-caption small, .map-caption b { display: block; }.map-caption small { color: #ff9d87; font-size: 8px; }.map-caption b { margin-top: 3px; font-size: 12px; }
+    .journey-list { padding: 19px; }.journey-event { display: grid; grid-template-columns: 36px 1fr; gap: 10px; padding: 13px 0; border-top: 1px solid #eee3db; cursor: pointer; }.journey-event:first-of-type { border-top: 0; }.journey-event > i { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; background: #fff0e9; color: var(--coral); font-size: 8px; font-style: normal; font-weight: 900; }.journey-event small, .journey-event b, .journey-event span { display: block; }.journey-event small { color: var(--coral); font-size: 7px; }.journey-event b { margin: 3px 0; font-size: 10px; }.journey-event span { color: var(--muted); font-size: 7px; }
+
+    /* Mobile product preview */
+    .mobile-status { height: 24px; display: flex; justify-content: space-between; align-items: center; padding: 5px 17px 0; font-size: 8px; font-weight: 800; }
+    .mobile-appbar { height: 47px; display: grid; grid-template-columns: 36px 1fr 36px; align-items: center; padding: 0 13px; border-bottom: 1px solid var(--line); text-align: center; }.mobile-appbar button { border: 0; background: transparent; cursor: pointer; }.mobile-appbar b { font-size: 12px; }.mobile-appbar span { font-size: 20px; text-align: left; }
+    .mobile-page { height: 763px; overflow: hidden; padding: 20px 21px 76px; }.mobile-page.with-appbar { height: 716px; }.mobile-page.scroll-look { padding-bottom: 18px; }
+    .mobile-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }.mobile-head .app-logo { font-size: 14px; }.mobile-head .app-logo i { width: 29px; height: 29px; }.mobile-avatar { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 50%; background: var(--peach); font-size: 8px; font-weight: 900; }
+    .mobile-page .preview-title { font-size: 25px; }.mobile-page .preview-copy { font-size: 10px; }
+    .mobile-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 15px; }.mobile-summary .summary-item { height: 84px; grid-template-columns: 35px 1fr; padding: 12px; border: 1px solid var(--line); background: white; }
+    .mobile-page .journey-banner { margin-top: 10px; height: 64px; }.mobile-page .next-card { height: 96px; display: block; }.mobile-page .next-card div { margin: 4px 0; }.mobile-page .next-card .status-pill { float: right; }
+    .mobile-bottom { position: absolute; left: 10px; right: 10px; bottom: 0; height: 58px; display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); background: white; }.mobile-bottom button { border: 0; background: transparent; color: #93857e; font-size: 7px; cursor: pointer; }.mobile-bottom button span { display: block; margin-bottom: 3px; font-size: 14px; }.mobile-bottom button.active { color: var(--coral); font-weight: 900; }
+    .mobile-floating { position: absolute; right: 22px; bottom: 70px; width: 47px; height: 47px; border: 0; border-radius: 15px; background: var(--coral); color: white; font-size: 22px; box-shadow: 0 5px 0 #bd4534; cursor: pointer; }
+    .mobile-form .preview-field { margin-top: 13px; }.mobile-form .preview-field div { height: 47px; }.mobile-form .slot-list { margin-top: 10px; }.mobile-form .slot-row { padding: 9px; }.mobile-form .app-primary { width: 100%; margin-top: 15px; }
+    .mobile-join { display: flex; flex-direction: column; justify-content: center; height: 100%; }.mobile-join .join-date { margin-top: 20px; background: #fff0e9; color: var(--ink); }.mobile-join .join-date small { color: var(--coral); }.mobile-join .join-date span { color: var(--muted); }.mobile-join .app-primary { margin-top: 15px; }
+    .mobile-meetup-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 13px; }.mobile-meetup-head .preview-title { margin-bottom: 4px; }.mobile-meetup-head > div > span { color: var(--muted); font-size: 8px; }.mobile-meetup-head .avatar-stack { align-self: center; }
+    .mobile-panel { margin-top: 10px; padding: 16px; box-shadow: none; }.mobile-panel .date-grid { grid-template-columns: 1fr; }.mobile-panel .date-card { display: grid; grid-template-columns: 60px 1fr; align-items: center; text-align: left; }.response-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; border-radius: 9px; background: #f3eae3; padding: 3px; }.response-switch span { border-radius: 7px; padding: 7px 3px; color: var(--muted); font-size: 7px; text-align: center; }.response-switch .yes-active { background: #dff2e6; color: var(--green); font-weight: 900; }.response-switch .maybe-active { background: #fff0c9; color: var(--yellow); font-weight: 900; }
+    .mobile-room .room-code { margin: 14px 0; }.mobile-room .member-row { padding: 10px 0; }.mobile-profile .profile-hero { margin-top: 8px; }.mobile-profile .profile-avatar { width: 62px; height: 62px; border-radius: 20px; }.mobile-profile .friend-row { padding: 10px 0; }.mobile-journey .map-panel { height: 280px; margin-top: 15px; }.mobile-journey .journey-list { margin-top: 12px; padding: 14px; }
+    .config-card { padding: 24px; }.config-icon { width: 62px; height: 62px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 20px; background: #fff0e9; color: var(--coral); font-size: 26px; }.config-card h1 { margin: 0 0 8px; font-size: 24px; }.config-card p { color: var(--muted); font-size: 10px; line-height: 1.6; }.config-card code { display: block; margin: 16px 0; border-radius: 12px; background: #eee5de; padding: 12px; font-size: 8px; line-height: 1.6; }
+
+    @media (max-width: 1180px) {
+      .docs-shell { grid-template-columns: 236px minmax(0, 1fr); }
+      .docs-topbar { grid-template-columns: 236px minmax(0, 1fr); }
+      .top-actions, .inspector { display: none; }
+      .docs-main { grid-column: 2; }
+      .tokens-board { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .docs-shell { display: block; }
+      .docs-topbar { position: sticky; display: flex; height: auto; min-height: 64px; flex-wrap: wrap; }
+      .docs-brand { height: 64px; border-right: 0; }
+      .view-tabs { width: 100%; order: 2; border-top: 1px solid var(--line); padding: 7px 12px; }
+      .screen-nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 12px; }
+      .platform-switch { margin-bottom: 0; }
+      #screenNavGroups { display: none; }
+      .docs-main { padding: 22px 14px 40px; }
+      .workspace-heading { display: block; }
+      .workspace-controls { margin-top: 14px; }
+      .overview-grid { grid-template-columns: 1fr; }
+      .prototype-stage { min-height: 620px; padding: 18px; }
+      .color-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="docs-shell">
+    <header class="docs-topbar">
+      <div class="docs-brand"><span class="brand-mark">会</span><div><b>Aimasho Live UI</b><span>Web + Mobile</span></div></div>
+      <nav class="view-tabs" aria-label="문서 보기">
+        <button class="view-tab active" data-view="overview">전체 화면</button>
+        <button class="view-tab" data-view="prototype">프로토타입</button>
+        <button class="view-tab" data-view="flow">화면 흐름</button>
+        <button class="view-tab" data-view="tokens">디자인 기준</button>
+      </nav>
+      <div class="top-actions"><label class="search"><span>⌕</span><input id="screenSearch" type="search" placeholder="화면 또는 경로 검색" aria-label="화면 또는 경로 검색" /></label></div>
+    </header>
+
+    <aside class="screen-nav">
+      <div class="platform-switch" role="group" aria-label="플랫폼 필터">
+        <button class="platform-tab active" data-platform="all">전체</button>
+        <button class="platform-tab" data-platform="web">Web</button>
+        <button class="platform-tab" data-platform="mobile">Mobile</button>
+      </div>
+      <div id="screenNavGroups"></div>
+    </aside>
+
+    <main class="docs-main">
+      <div class="workspace-heading">
+        <div><p class="eyebrow" id="workspaceEyebrow">LIVE DOCUMENT</p><h1 id="workspaceTitle">전체 화면</h1><p id="workspaceDescription">현재 코드 기준의 웹·모바일 화면을 한곳에서 비교하고, 화면을 열어 실제 흐름처럼 이동할 수 있습니다.</p></div>
+        <div class="workspace-controls" id="workspaceControls" hidden><button class="icon-button" id="previousScreen" aria-label="이전 화면">←</button><button class="icon-button" id="fitScreen">화면 맞춤</button><button class="icon-button" id="nextScreen" aria-label="다음 화면">→</button></div>
+      </div>
+      <section id="workspace" aria-live="polite"></section>
+    </main>
+
+    <aside class="inspector" id="inspector"></aside>
+  </div>
+
+  <script>
+    const screens = [
+      { id: 'web-guest', platform: 'web', group: '시작', icon: '⌂', title: '게스트 홈', route: '/', type: 'guest', summary: '로그인 없이 약속을 만들거나 서비스 흐름을 이해하는 시작 화면.', sources: ['web/src/components/guest-home.tsx', 'web/src/components/home-header.tsx'], actions: [['모임 만들기', 'web-create'], ['로그인', 'web-login']] },
+      { id: 'web-login', platform: 'web', group: '시작', icon: '↳', title: '로그인', route: '/login', type: 'login', summary: 'Google 또는 게스트 계정으로 나의 Aimasho를 시작하는 화면.', sources: ['web/src/app/login/page.tsx'], actions: [['로그인 완료', 'web-dashboard'], ['게스트로 돌아가기', 'web-guest']] },
+      { id: 'web-dashboard', platform: 'web', group: '홈', icon: '▦', title: '일정 보드', route: '/', type: 'dashboard', summary: '다가오는 약속, 완료 기록, 캘린더와 여정을 확인하는 로그인 홈.', sources: ['web/src/components/home-dashboard.tsx', 'web/src/components/social-home.tsx'], actions: [['새 약속', 'web-create'], ['다가오는 약속', 'web-plan'], ['나의 여정', 'web-journey'], ['프로필', 'web-profile']] },
+      { id: 'web-create', platform: 'web', group: '약속', icon: '+', title: '새 약속 만들기', route: '/new', type: 'create', summary: '이름, 후보 시간, 식사·활동 투표 옵션을 설정하는 생성 화면.', sources: ['web/src/components/meetup-create-form.tsx', 'web/src/app/new/page.tsx'], actions: [['약속 생성', 'web-plan'], ['홈으로', 'web-dashboard']] },
+      { id: 'web-invite', platform: 'web', group: '약속', icon: '↗', title: '초대 참여', route: '/m/:meetupId', type: 'join', summary: '초대 링크를 받은 참가자가 이름을 입력하고 약속에 참여하는 화면.', sources: ['web/src/components/join-card.tsx', 'web/src/components/meetup-page-client.tsx'], actions: [['참여하기', 'web-plan'], ['홈으로', 'web-guest']] },
+      { id: 'web-plan', platform: 'web', group: '약속', icon: '◷', title: '약속 계획', route: '/m/:meetupId', type: 'plan', summary: '날짜 응답, 할 일 투표, 장소와 타임라인을 한곳에서 조율하는 핵심 화면.', sources: ['web/src/components/meetup-view.tsx', 'web/src/components/event-plan-panel.tsx', 'web/src/components/slot-vote-editor.tsx'], actions: [['일정 보드', 'web-dashboard'], ['Room 보기', 'web-room'], ['친구 기록', 'web-friend']] },
+      { id: 'web-room-join', platform: 'web', group: 'Room', icon: '⇢', title: 'Room 참여', route: '/r/:inviteCode', type: 'room-join', summary: '지속적으로 만나는 그룹의 초대 코드를 확인하고 참여하는 화면.', sources: ['web/src/components/join-room-card.tsx'], actions: [['Room 참여', 'web-room'], ['홈으로', 'web-guest']] },
+      { id: 'web-room', platform: 'web', group: 'Room', icon: '♣', title: 'Room 상세', route: '/rooms/:roomId', type: 'room', summary: '멤버, 예정·지난 약속과 Room 전용 새 약속을 관리하는 화면.', sources: ['web/src/components/room-detail.tsx'], actions: [['Room 약속 만들기', 'web-create'], ['약속 보기', 'web-plan'], ['프로필', 'web-profile']] },
+      { id: 'web-profile', platform: 'web', group: '기록', icon: '☺', title: '프로필', route: '/profile', type: 'profile', summary: '나의 만남 통계, 친구, 그룹과 최근 기록을 확인하는 화면.', sources: ['web/src/components/profile-dashboard.tsx'], actions: [['친구 상세', 'web-friend'], ['나의 여정', 'web-journey'], ['홈', 'web-dashboard']] },
+      { id: 'web-friend', platform: 'web', group: '기록', icon: '♡', title: '친구 기록', route: '/friends/:uid', type: 'friend', summary: '특정 친구와 만난 횟수, 함께한 약속과 추억 메모를 보는 화면.', sources: ['web/src/components/friend-page-client.tsx', 'web/src/components/memory-notes.tsx'], actions: [['함께한 약속', 'web-plan'], ['프로필', 'web-profile']] },
+      { id: 'web-journey', platform: 'web', group: '기록', icon: '⌖', title: '나의 여정', route: '/journey', type: 'journey', summary: '완료한 약속과 방문 장소를 지도와 타임라인으로 재생하는 화면.', sources: ['web/src/components/journey-page-client.tsx', 'web/src/components/journey-player.tsx'], actions: [['추억 열기', 'web-plan'], ['프로필', 'web-profile'], ['홈', 'web-dashboard']] },
+
+      { id: 'mobile-config', platform: 'mobile', group: '시작', icon: '⚙', title: '앱 설정 안내', route: 'configuration', type: 'config', summary: 'Firebase 핵심 설정이 없을 때 개발 환경 구성을 안내하는 화면.', sources: ['mobile/lib/app/aimasho_app.dart'], actions: [['설정 완료', 'mobile-home']] },
+      { id: 'mobile-home', platform: 'mobile', group: '홈', icon: '⌂', title: '모바일 홈', route: '/', type: 'dashboard', summary: '다가오는 약속과 최근 기록을 빠르게 확인하는 모바일 시작 화면.', sources: ['mobile/lib/features/home/home_screen.dart', 'mobile/lib/features/home/home_dashboard_view.dart'], actions: [['새 약속', 'mobile-create'], ['다가오는 약속', 'mobile-plan'], ['여정', 'mobile-journey'], ['프로필', 'mobile-profile']] },
+      { id: 'mobile-create', platform: 'mobile', group: '약속', icon: '+', title: '새 약속', route: '/new', type: 'create', summary: '후보 시간과 함께할 활동을 모바일 폼으로 설정하는 화면.', sources: ['mobile/lib/features/meetup/create_meetup_screen.dart'], actions: [['약속 생성', 'mobile-plan'], ['홈', 'mobile-home']] },
+      { id: 'mobile-invite', platform: 'mobile', group: '약속', icon: '↗', title: '모바일 초대 참여', route: '/m/:meetupId', type: 'join', summary: '초대 링크에서 이름을 입력하고 모바일 약속 화면으로 진입합니다.', sources: ['mobile/lib/features/meetup/join_meetup_screen.dart'], actions: [['참여하기', 'mobile-plan'], ['홈', 'mobile-home']] },
+      { id: 'mobile-plan', platform: 'mobile', group: '약속', icon: '◷', title: '모바일 약속 계획', route: '/m/:meetupId/plan', type: 'plan', summary: '날짜 응답과 활동 투표를 터치에 맞게 조율하는 핵심 화면.', sources: ['mobile/lib/features/meetup/meetup_screen.dart', 'mobile/lib/features/meetup/meetup_planning_sections.dart', 'mobile/lib/features/meetup/meetup_schedule_sections.dart'], actions: [['홈', 'mobile-home'], ['Room', 'mobile-room'], ['친구 기록', 'mobile-friend']] },
+      { id: 'mobile-room-join', platform: 'mobile', group: 'Room', icon: '⇢', title: '모바일 Room 참여', route: '/r/:inviteCode', type: 'room-join', summary: 'Room 초대 링크를 확인하고 모바일 앱에서 참여하는 화면.', sources: ['mobile/lib/features/rooms/join_room_screen.dart'], actions: [['Room 참여', 'mobile-room'], ['홈', 'mobile-home']] },
+      { id: 'mobile-room', platform: 'mobile', group: 'Room', icon: '♣', title: '모바일 Room', route: '/rooms/:roomId', type: 'room', summary: '멤버와 그룹 약속을 모바일에서 관리하는 화면.', sources: ['mobile/lib/features/rooms/room_screen.dart'], actions: [['Room 약속 만들기', 'mobile-create'], ['약속 보기', 'mobile-plan'], ['프로필', 'mobile-profile']] },
+      { id: 'mobile-profile', platform: 'mobile', group: '기록', icon: '☺', title: '모바일 프로필', route: '/profile', type: 'profile', summary: '나의 관계와 기록을 모바일 카드 형식으로 확인하는 화면.', sources: ['mobile/lib/features/profile/profile_screen.dart'], actions: [['친구 상세', 'mobile-friend'], ['여정', 'mobile-journey'], ['홈', 'mobile-home']] },
+      { id: 'mobile-friend', platform: 'mobile', group: '기록', icon: '♡', title: '모바일 친구 기록', route: '/friends/:uid', type: 'friend', summary: '친구와 함께한 약속과 메모를 모바일 타임라인으로 보는 화면.', sources: ['mobile/lib/features/friends/friend_history_screen.dart'], actions: [['함께한 약속', 'mobile-plan'], ['프로필', 'mobile-profile']] },
+      { id: 'mobile-journey', platform: 'mobile', group: '기록', icon: '⌖', title: '모바일 여정', route: '/journey', type: 'journey', summary: '방문했던 장소와 추억을 지도와 카드로 재생하는 화면.', sources: ['mobile/lib/features/journey/journey_screen.dart', 'mobile/lib/features/journey/journey_player.dart'], actions: [['추억 열기', 'mobile-plan'], ['프로필', 'mobile-profile'], ['홈', 'mobile-home']] }
+    ];
+
+    const state = { view: 'overview', platform: 'all', currentId: 'web-guest', query: '', fit: true };
+    const workspace = document.querySelector('#workspace');
+    const inspector = document.querySelector('#inspector');
+    const navGroups = document.querySelector('#screenNavGroups');
+    const heading = document.querySelector('#workspaceTitle');
+    const eyebrow = document.querySelector('#workspaceEyebrow');
+    const description = document.querySelector('#workspaceDescription');
+    const controls = document.querySelector('#workspaceControls');
+
+    const getScreen = id => screens.find(screen => screen.id === id) || screens[0];
+    const target = (platform, key) => `${platform}-${key}`;
+    const currentScreen = () => getScreen(state.currentId);
+    const visibleScreens = () => screens.filter(screen => {
+      const platformMatch = state.platform === 'all' || screen.platform === state.platform;
+      const haystack = `${screen.title} ${screen.route} ${screen.summary}`.toLowerCase();
+      return platformMatch && haystack.includes(state.query.toLowerCase().trim());
+    });
+
+    function appLogo() { return '<span class="app-logo"><i>会</i>aimasho</span>'; }
+    function webFrame(screen, content) {
+      const p = screen.platform;
+      return `<div class="app-browser"><i></i><i></i><i></i><span>aimasho.app${screen.route === '/' ? '' : screen.route.replaceAll(':meetupId', 'saturday').replaceAll(':roomId', 'friends').replaceAll(':uid', 'mika').replaceAll(':inviteCode', 'JOIN-27')}</span></div>
+        <nav class="app-nav">${appLogo()}<div class="app-nav-links"><button data-go="${target(p, 'dashboard')}">홈</button><button data-go="${target(p, 'journey')}">여정</button><button data-go="${target(p, 'profile')}">프로필</button><button class="nav-cta" data-go="${target(p, 'create')}">+ 약속 만들기</button></div></nav>${content}`;
+    }
+    function mobileFrame(screen, content, options = {}) {
+      const p = screen.platform;
+      const appbar = options.appbar ? `<div class="mobile-appbar"><button data-go="${options.back || target(p, 'home')}"><span>‹</span></button><b>${options.appbar}</b><button>${options.action || ''}</button></div>` : '';
+      const bottom = options.bottom === false ? '' : `<nav class="mobile-bottom"><button class="${screen.type === 'dashboard' ? 'active' : ''}" data-go="mobile-home"><span>⌂</span>홈</button><button class="${['create','join','plan','room','room-join'].includes(screen.type) ? 'active' : ''}" data-go="mobile-plan"><span>▦</span>일정</button><button class="${screen.type === 'journey' ? 'active' : ''}" data-go="mobile-journey"><span>⌖</span>여정</button><button class="${['profile','friend'].includes(screen.type) ? 'active' : ''}" data-go="mobile-profile"><span>☺</span>프로필</button></nav>`;
+      return `<div class="mobile-status"><b>9:41</b><span>▮ ▮ ◉</span></div>${appbar}${content}${bottom}`;
+    }
+
+    function dashboardMarkup(screen) {
+      const p = screen.platform;
+      if (p === 'mobile') return mobileFrame(screen, `<main class="mobile-page"><div class="mobile-head">${appLogo()}<span class="mobile-avatar" data-go="mobile-profile">성</span></div><p class="preview-eyebrow">MY AIMASHO</p><h1 class="preview-title">성화님의<br>일정 보드</h1><p class="preview-copy">다가오는 약속과 함께한 기록을 확인해요.</p><div class="mobile-summary"><div class="summary-item"><i>▦</i><b>3</b><span>다가오는 약속</span></div><div class="summary-item"><i>✓</i><b>12</b><span>함께한 날</span></div></div><div class="journey-banner" data-go="mobile-journey"><i>⌖</i><div><small>MY JOURNEY</small><b>함께한 장소를 지도에서 재생</b><span>완료한 약속을 돌아보세요.</span></div><strong>→</strong></div><div class="next-card preview-card" data-go="mobile-plan"><small>가장 가까운 약속</small><div><b>대학 친구들과 저녁</b><span>9월 19일 (토) 18:30</span></div><span class="status-pill">조율 중</span></div><div class="calendar-card preview-card"><div class="calendar-title"><h2>이번 달 일정</h2><span>3개의 약속</span></div>${miniCalendar()}</div><button class="mobile-floating" data-go="mobile-create">＋</button></main>`);
+      return webFrame(screen, `<main class="preview-page"><div class="dash-head"><div><p class="preview-eyebrow">MY AIMASHO</p><h1 class="preview-title">성화님의 일정 보드</h1><p class="preview-copy">다가오는 약속과 함께한 기록을 한 흐름에서 확인해요.</p></div><button class="app-secondary" data-go="web-create">+ 약속 만들기</button></div><div class="summary-grid"><div class="summary-item tone-coral"><i>▦</i><b>3</b><span>다가오는 약속</span></div><div class="summary-item tone-green"><i>✓</i><b>12</b><span>함께한 날</span></div><div class="summary-item tone-yellow"><i>☺</i><b>18</b><span>함께한 친구</span></div><div class="summary-item tone-rose"><i>♣</i><b>4</b><span>그룹</span></div></div><div class="journey-banner" data-go="web-journey"><i>⌖</i><div><small>MY AIMASHO JOURNEY</small><b>함께한 장소를 지도에서 재생</b><span>완료한 약속을 날짜순으로 돌아보세요.</span></div><strong>→</strong></div><div class="next-card preview-card" data-go="web-plan"><i>▦</i><div><small>가장 가까운 약속</small><b>대학 친구들과 저녁</b><span>9월 19일 (토) 18:30 · 우메다 모임</span></div><span class="status-pill">조율 중</span><strong>→</strong></div><div class="calendar-card preview-card"><div class="calendar-title"><h2>내 캘린더</h2><span>캘린더 · 타임라인</span></div>${miniCalendar()}</div></main>`);
+    }
+
+    function miniCalendar() {
+      const days = Array.from({ length: 28 }, (_, i) => i + 1);
+      return `<div class="calendar-week">${['일','월','화','수','목','금','토'].map(d => `<b>${d}</b>`).join('')}</div><div class="calendar-days">${days.map(day => `<i class="${day === 12 ? 'today' : ''} ${[19,24].includes(day) ? 'event' : ''}">${day}</i>`).join('')}</div>`;
+    }
+
+    function guestMarkup(screen) {
+      return webFrame(screen, `<main class="preview-page"><div class="guest-layout"><div class="guest-copy"><p class="preview-eyebrow">링크 하나로 모임 준비 끝</p><h1>언제 만나서<br><strong>뭐 할까?</strong></h1><p>날짜 투표부터 할 일, 장소, 정산까지.<br>로그인 없이 한 모임에서 함께 정해요.</p><button class="app-primary" data-go="web-create">로그인 없이 모임 만들기 →</button><small>참가자도 링크를 열고 이름만 입력하면 돼요.</small></div><section class="plan-preview preview-card"><span class="app-chip active">이렇게 모여요 · 예시</span><h2>우리의 토요일</h2><div class="plan-step"><i>▦</i><div><b>언제가 좋아?</b><small>날짜 투표</small></div></div><div class="plan-step"><i>✦</i><div><b>뭐 하고 놀까?</b><small>식사·활동 함께 고르기</small></div></div><div class="plan-step"><i>⌖</i><div><b>그날의 플랜</b><small>장소·할 일·비용 한곳에서</small></div></div></section></div></main>`);
+    }
+
+    function loginMarkup(screen) {
+      return webFrame(screen, `<main class="preview-page centered"><section class="auth-card preview-card">${appLogo()}<h1>나의 aimasho 시작하기</h1><p>로그인하면 친구별 만남과 함께한 추억을<br>안전하게 이어서 기록할 수 있어요.</p><button class="app-primary" data-go="web-dashboard">Google로 계속하기</button><div class="auth-divider">또는</div><div class="preview-field"><span>이메일</span><div>name@example.com</div></div><button class="app-secondary" data-go="web-dashboard">이메일로 계속하기</button><button class="app-text-button" data-go="web-guest">로그인 없이 둘러보기</button></section></main>`);
+    }
+
+    function createMarkup(screen) {
+      const p = screen.platform;
+      const fields = `<div class="preview-field"><span>내 이름</span><div>성화</div></div><div class="preview-field"><span>약속 이름</span><div>대학 친구들과 저녁</div></div>`;
+      const slots = `<div class="slot-list"><div class="slot-row"><i>01</i><div><b>9월 19일 (토)</b><small>18:30</small></div><span>×</span></div><div class="slot-row"><i>02</i><div><b>9월 20일 (일)</b><small>13:00</small></div><span>×</span></div><div class="slot-row"><i>03</i><div><b>9월 25일 (금)</b><small>19:00</small></div><span>×</span></div></div>`;
+      if (p === 'mobile') return mobileFrame(screen, `<main class="mobile-page with-appbar mobile-form scroll-look"><p class="preview-eyebrow">LET'S GET TOGETHER</p><h1 class="preview-title">언제 만날까요?</h1><p class="preview-copy">후보 날짜를 몇 개 골라주세요.<br>친구들이 편한 시간을 알려줄 거예요.</p>${fields}<div class="panel-heading" style="margin-top:18px"><h2 style="font-size:14px;margin:0">후보 날짜와 시간</h2><span>3/12</span></div>${slots}<button class="app-text-button">＋ 후보 추가</button><div style="margin-top:10px"><span class="app-chip active">✓ 식사 투표</span> <span class="app-chip active">✓ 활동 투표</span></div><button class="app-primary" data-go="mobile-plan">약속 만들기 →</button></main>`, { appbar: '새 약속', back: 'mobile-home', bottom: false });
+      return webFrame(screen, `<main class="preview-page"><div class="page-head"><div><p class="preview-eyebrow">LET'S GET TOGETHER</p><h1 class="preview-title">언제 만날까요?</h1><p class="preview-copy">후보 날짜를 몇 개 골라주세요. 친구들이 편한 시간을 알려줄 거예요.</p></div></div><div class="form-layout"><section class="form-card preview-card">${fields}<div class="panel-heading" style="margin-top:17px"><h2 style="font-size:15px;margin:0">후보 날짜와 시간</h2><span>3/12</span></div>${slots}<button class="app-text-button">＋ 후보 추가</button><div style="margin-top:8px"><span class="app-chip active">✓ 식사 투표</span> <span class="app-chip active">✓ 활동 투표</span></div><div class="form-actions"><button class="app-secondary" data-go="web-dashboard">취소</button><button class="app-primary" data-go="web-plan">약속 만들기 →</button></div></section><aside class="guide-card preview-card"><p class="preview-eyebrow">AFTER CREATION</p><h2>만든 뒤에도<br>계속 함께 정해요.</h2><p>초대 링크 하나로 친구들의 응답을 모으고, 장소와 할 일까지 같은 방에서 관리합니다.</p><div class="guide-step"><i>1</i><div><b>친구 초대</b><small>링크를 보내고 이름만 입력</small></div></div><div class="guide-step"><i>2</i><div><b>날짜·활동 투표</b><small>가능 · 아마 · 어려움</small></div></div><div class="guide-step"><i>3</i><div><b>플랜 확정</b><small>장소·타임라인·정산까지</small></div></div></aside></div></main>`);
+    }
+
+    function joinMarkup(screen, room = false) {
+      const p = screen.platform;
+      const go = room ? target(p, 'room') : target(p, 'plan');
+      const title = room ? '우메다 친구들 Room' : '우리의 토요일';
+      const label = room ? 'ROOM INVITATION' : 'MEETUP INVITATION';
+      const copy = room ? '앞으로의 약속과 함께한 기록을 이 Room에서 이어가요.' : '친구들이 기다리고 있어요. 이름만 입력하면 바로 참여할 수 있어요.';
+      if (p === 'mobile') return mobileFrame(screen, `<main class="mobile-page with-appbar"><section class="mobile-join"><p class="preview-eyebrow">${label}</p><h1 class="preview-title">${title}</h1><p class="preview-copy">${copy}</p><div class="join-date"><small>${room ? 'MEMBERS' : 'CANDIDATE DATE'}</small><b>${room ? '성화 · 지민 · 민수' : '9월 19일 토요일'}</b><span>${room ? '현재 6명 참여 중' : '18:30 · 후보 시간'}</span></div><div class="preview-field"><span>내 이름</span><div>이름을 입력해주세요</div></div><button class="app-primary" data-go="${go}">${room ? 'Room 참여하기' : '약속 참여하기'} →</button></section></main>`, { appbar: room ? 'Room 초대' : '약속 초대', back: 'mobile-home', bottom: false });
+      return webFrame(screen, `<main class="preview-page centered"><section class="join-shell preview-card"><div class="join-visual"><p class="preview-eyebrow">${label}</p><h2>${title}</h2><p>${copy}</p><div class="join-date"><small>${room ? 'MEMBERS' : 'CANDIDATE DATE'}</small><b>${room ? '성화 · 지민 · 민수 외 3명' : '9월 19일 토요일'}</b><span>${room ? '현재 6명 참여 중' : '18:30 · 후보 시간'}</span></div></div><div class="join-card"><h2>${room ? 'Room에 참여할까요?' : '같이 만날까요?'}</h2><p class="preview-copy">참여할 때 사용할 이름을 알려주세요.</p><div class="preview-field"><span>내 이름</span><div>이름을 입력해주세요</div></div><button class="app-primary" data-go="${go}">${room ? 'Room 참여하기' : '약속 참여하기'} →</button><button class="app-text-button" data-go="${target(p, 'guest')}">나중에 할게요</button></div></section></main>`);
+    }
+
+    function planMarkup(screen) {
+      const p = screen.platform;
+      const head = `<div class="mobile-meetup-head"><div><p class="preview-eyebrow">MEETUP PLANNING</p><h1 class="preview-title">우리의 토요일</h1><span>3명 참여 · 9/16 응답 마감</span></div><div class="avatar-stack"><i>성</i><i>지</i><i>민</i></div></div>`;
+      const dateCards = `<div class="date-grid"><div class="date-card selected"><div><small>토요일</small><b>9.19</b><em>18:30</em></div><div class="response-switch"><span class="yes-active">가능</span><span>아마</span><span>어려움</span></div></div><div class="date-card"><div><small>일요일</small><b>9.20</b><em>13:00</em></div><div class="response-switch"><span>가능</span><span class="maybe-active">아마</span><span>어려움</span></div></div><div class="date-card"><div><small>금요일</small><b>9.25</b><em>19:00</em></div><div class="response-switch"><span class="yes-active">가능</span><span>아마</span><span>어려움</span></div></div></div>`;
+      const choices = `<div class="choice-row selected"><span class="choice-check">✓</span><div><b>스시 먹기</b><small>성화 · 지민</small></div><strong>2표</strong></div><div class="choice-row"><span class="choice-check"></span><div><b>전시회 보기</b><small>민수</small></div><strong>1표</strong></div><div class="choice-row selected"><span class="choice-check">✓</span><div><b>카페에서 수다</b><small>성화 · 지민 · 민수</small></div><strong>3표</strong></div>`;
+      if (p === 'mobile') return mobileFrame(screen, `<main class="mobile-page with-appbar scroll-look">${head}<section class="mobile-panel preview-card"><p class="preview-eyebrow">WHEN</p><div class="panel-heading"><div><h2>언제가 좋아요?</h2><p>각 날짜마다 내 응답을 골라주세요.</p></div></div>${dateCards}</section><section class="mobile-panel preview-card"><p class="preview-eyebrow">WHAT</p><div class="panel-heading"><div><h2>무엇을 할까요?</h2><p>여러 개를 선택할 수 있어요.</p></div></div>${choices}</section></main>`, { appbar: '우리의 토요일', back: 'mobile-home', action: '↗', bottom: false });
+      return webFrame(screen, `<main class="preview-page"><div class="page-head">${head}<button class="app-secondary">초대 링크 복사</button></div><div class="meetup-grid"><div class="meetup-main"><section class="vote-panel preview-card"><div class="panel-heading"><div><p class="preview-eyebrow">WHEN</p><h2>언제가 좋아요?</h2><p>가능한 시간에 응답해 주세요.</p></div><span class="status-pill">9/16 마감</span></div><div class="date-grid"><div class="date-card selected"><small>토요일</small><b>9.19</b><em>18:30</em><div class="vote-dots"><i class="yes"></i><i class="yes"></i><i class="maybe"></i></div><em>2 가능 · 1 아마</em></div><div class="date-card"><small>일요일</small><b>9.20</b><em>13:00</em><div class="vote-dots"><i class="yes"></i><i class="maybe"></i><i class="no"></i></div><em>1 가능 · 1 아마</em></div><div class="date-card"><small>금요일</small><b>9.25</b><em>19:00</em><div class="vote-dots"><i class="yes"></i><i class="yes"></i><i class="yes"></i></div><em>전원 가능</em></div></div></section><section class="what-panel preview-card"><div class="panel-heading"><div><p class="preview-eyebrow">WHAT</p><h2>무엇을 할까요?</h2></div><button class="app-text-button">+ 선택지</button></div>${choices}</section></div><aside class="meetup-side"><section class="current-panel preview-card"><p class="preview-eyebrow">CURRENT PLAN</p><h2>아직 조율 중이에요</h2><p>모두의 응답을 기다리고 있어요.</p><div class="app-progress"><i></i></div><p>3명 중 2명 응답</p></section><section class="timeline-panel preview-card"><div class="panel-heading"><div><p class="preview-eyebrow">TIMELINE</p><h2>그날의 플랜</h2></div><button class="app-text-button">+ 추가</button></div><div class="timeline-row"><i>18:30</i><div><b>우메다역 집합</b><small>중앙 개찰구</small></div></div><div class="timeline-row"><i>19:00</i><div><b>저녁 식사</b><small>장소 투표 후 결정</small></div></div><div class="timeline-row"><i>21:00</i><div><b>카페</b><small>천천히 이야기해요</small></div></div></section></aside></div></main>`);
+    }
+
+    function roomMarkup(screen) {
+      const p = screen.platform;
+      const memberRows = `<div class="member-row"><span class="person-avatar">성</span><div><b>성화</b><small>Room 관리자 · 12번 함께함</small></div><span>›</span></div><div class="member-row"><span class="person-avatar">지</span><div><b>지민</b><small>지난주에 만남</small></div><span>›</span></div><div class="member-row"><span class="person-avatar">민</span><div><b>민수</b><small>3개의 약속 참여</small></div><span>›</span></div>`;
+      if (p === 'mobile') return mobileFrame(screen, `<main class="mobile-page with-appbar mobile-room"><p class="preview-eyebrow">OUR ROOM</p><h1 class="preview-title">우메다 친구들</h1><p class="preview-copy">6명의 친구 · 함께한 날 18번</p><div class="room-code"><small>ROOM INVITE CODE</small><b>AIMA-27</b><p>링크를 복사해서 새 친구를 초대하세요.</p></div><div class="panel-heading"><h2 style="font-size:14px">멤버</h2><button class="app-text-button">전체 보기</button></div>${memberRows}<button class="app-primary" style="width:100%;margin-top:14px" data-go="mobile-create">+ 이 Room에서 약속 만들기</button></main>`, { appbar: 'Room', back: 'mobile-home' });
+      return webFrame(screen, `<main class="preview-page"><div class="page-head"><div><p class="preview-eyebrow">OUR ROOM</p><h1 class="preview-title">우메다 친구들</h1><p class="preview-copy">6명의 친구 · 함께한 날 18번</p></div><button class="app-primary" data-go="web-create">+ 이 Room에서 약속 만들기</button></div><div class="room-grid"><section class="room-main preview-card"><div class="panel-heading"><h2 style="font-size:17px">다가오는 약속</h2><button class="app-text-button">전체 보기</button></div><div class="meetup-row" data-go="web-plan"><span class="person-avatar">19</span><div><b>대학 친구들과 저녁</b><small>9월 19일 18:30 · 날짜 조율 중</small></div><span class="status-pill">예정</span></div><div class="meetup-row" data-go="web-plan"><span class="person-avatar">03</span><div><b>가을 피크닉</b><small>10월 3일 12:00 · 오사카성 공원</small></div><span class="status-pill">장소 확정</span></div><div class="panel-heading" style="margin-top:18px"><h2 style="font-size:17px">멤버</h2><button class="app-text-button">관리</button></div>${memberRows}</section><aside class="room-side preview-card"><div class="room-code"><small>ROOM INVITE CODE</small><b>AIMA-27</b><p>링크를 복사해서 새 친구를 초대하세요.</p></div><div class="memory-note" style="margin-top:14px"><small>ROOM MEMORY</small><p>이번 달에는 벌써 두 번 만났어요. 다음에는 교토로 가볼까요?</p></div></aside></div></main>`);
+    }
+
+    function profileMarkup(screen, friend = false) {
+      const p = screen.platform;
+      const name = friend ? '미카' : '성화';
+      const eyebrowText = friend ? 'FRIEND MEMORY' : 'MY PROFILE';
+      const friendRows = `<div class="friend-row" data-go="${target(p, friend ? 'plan' : 'friend')}"><span class="person-avatar">미</span><div><b>미카</b><small>12번 함께함 · 최근 9월 1일</small></div><span>›</span></div><div class="friend-row" data-go="${target(p, 'plan')}"><span class="person-avatar">지</span><div><b>지민</b><small>8번 함께함 · 최근 8월 22일</small></div><span>›</span></div><div class="friend-row" data-go="${target(p, 'plan')}"><span class="person-avatar">민</span><div><b>민수</b><small>5번 함께함 · 최근 7월 18일</small></div><span>›</span></div>`;
+      const body = `<p class="preview-eyebrow">${eyebrowText}</p><div class="profile-hero"><span class="profile-avatar">${name[0]}</span><div><h2>${name}${friend ? '와 함께한 기록' : ''}</h2><p>${friend ? '처음 만난 날 · 2025년 4월 12일' : 'Osaka · 4개의 Room 참여 중'}</p></div></div><div class="stat-row"><div class="stat-box"><b>${friend ? '12' : '18'}</b><small>${friend ? '함께한 날' : '친구'}</small></div><div class="stat-box"><b>${friend ? '34' : '12'}</b><small>${friend ? '함께 간 장소' : '함께한 날'}</small></div><div class="stat-box"><b>${friend ? '3' : '4'}</b><small>${friend ? '같은 Room' : '그룹'}</small></div></div>${friend ? '<div class="memory-note"><small>MEMORY NOTE</small><p>맛있는 곳을 함께 찾아다니는 친구. 다음에는 교토의 작은 카페에 가기로 했어요.</p></div><div class="panel-heading" style="margin-top:15px"><h2 style="font-size:14px">함께한 약속</h2><button class="app-text-button">전체 보기</button></div>' : '<div class="panel-heading"><h2 style="font-size:14px">자주 만난 친구</h2><button class="app-text-button">전체 보기</button></div>'}${friendRows}`;
+      if (p === 'mobile') return mobileFrame(screen, `<main class="mobile-page with-appbar mobile-profile scroll-look">${body}</main>`, { appbar: friend ? '친구 기록' : '프로필', back: 'mobile-home' });
+      return webFrame(screen, `<main class="preview-page"><div class="profile-grid"><section class="profile-main preview-card">${body}</section><aside class="profile-side preview-card"><p class="preview-eyebrow">RECENT MEMORY</p><h2 style="font-size:17px">최근 함께한 순간</h2><div class="journey-event" data-go="${target(p, 'plan')}"><i>01</i><div><small>2026.09.01 · OSAKA</small><b>우메다에서 만난 밤</b><span>친구 4명 · 장소 3곳</span></div></div><div class="journey-event" data-go="${target(p, 'plan')}"><i>02</i><div><small>2026.07.18 · KYOTO</small><b>여름 교토 산책</b><span>친구 2명 · 장소 5곳</span></div></div><button class="app-secondary" style="width:100%;margin-top:12px" data-go="${target(p, 'journey')}">나의 여정 보기</button></aside></div></main>`);
+    }
+
+    function journeyMarkup(screen) {
+      const p = screen.platform;
+      const map = `<div class="map-panel"><div class="map-lines"></div><div class="map-water"></div><i class="map-pin pin-a">1</i><i class="map-pin pin-b">2</i><i class="map-pin pin-c">3</i><div class="map-caption"><small>12개의 추억</small><b>Osaka · Kyoto · Kobe</b></div></div>`;
+      const list = `<section class="journey-list preview-card"><p class="preview-eyebrow">MEMORY TIMELINE</p><div class="journey-event" data-go="${target(p, 'plan')}"><i>01</i><div><small>2026.09.01 · OSAKA</small><b>우메다에서 만난 밤</b><span>친구 4명 · 장소 3곳</span></div></div><div class="journey-event" data-go="${target(p, 'plan')}"><i>02</i><div><small>2026.07.18 · KYOTO</small><b>여름 교토 산책</b><span>친구 2명 · 장소 5곳</span></div></div><div class="journey-event" data-go="${target(p, 'plan')}"><i>03</i><div><small>2026.05.04 · KOBE</small><b>바다 보러 간 날</b><span>친구 5명 · 장소 4곳</span></div></div><button class="app-primary" style="width:100%;margin-top:12px">여정 재생하기 ▶</button></section>`;
+      if (p === 'mobile') return mobileFrame(screen, `<main class="mobile-page with-appbar mobile-journey scroll-look"><p class="preview-eyebrow">MY AIMASHO JOURNEY</p><h1 class="preview-title">함께한 순간을<br>다시 걸어봐요.</h1><p class="preview-copy">완료한 약속과 장소를 날짜순으로 재생해요.</p>${map}${list}</main>`, { appbar: '나의 여정', back: 'mobile-home' });
+      return webFrame(screen, `<main class="preview-page"><div class="page-head"><div><p class="preview-eyebrow">MY AIMASHO JOURNEY</p><h1 class="preview-title">함께한 순간을 다시 걸어봐요.</h1><p class="preview-copy">완료한 약속과 장소를 날짜순으로 재생해요.</p></div><button class="app-primary">여정 재생하기 ▶</button></div><div class="journey-grid">${map}${list}</div></main>`);
+    }
+
+    function configMarkup(screen) {
+      return mobileFrame(screen, `<main class="mobile-page centered"><section class="config-card preview-card"><span class="config-icon">⚙</span><h1>앱 연결이 필요해요</h1><p>로컬 환경에서 Aimasho를 실행하려면 Firebase 설정 파일을 먼저 연결해주세요.</p><code>firebase.env.json<br>FIREBASE_PROJECT_ID<br>GOOGLE_CLIENT_ID</code><button class="app-primary" data-go="mobile-home">설정 확인 완료</button></section></main>`, { bottom: false });
+    }
+
+    function screenMarkup(screen) {
+      if (screen.type === 'guest') return guestMarkup(screen);
+      if (screen.type === 'login') return loginMarkup(screen);
+      if (screen.type === 'dashboard') return dashboardMarkup(screen);
+      if (screen.type === 'create') return createMarkup(screen);
+      if (screen.type === 'join') return joinMarkup(screen);
+      if (screen.type === 'room-join') return joinMarkup(screen, true);
+      if (screen.type === 'plan') return planMarkup(screen);
+      if (screen.type === 'room') return roomMarkup(screen);
+      if (screen.type === 'profile') return profileMarkup(screen);
+      if (screen.type === 'friend') return profileMarkup(screen, true);
+      if (screen.type === 'journey') return journeyMarkup(screen);
+      if (screen.type === 'config') return configMarkup(screen);
+      return '';
+    }
+
+    function renderNav() {
+      const groups = [...new Set(screens.map(s => `${s.platform}:${s.group}`))];
+      navGroups.innerHTML = groups.map(key => {
+        const [platform, group] = key.split(':');
+        if (state.platform !== 'all' && state.platform !== platform) return '';
+        const items = screens.filter(s => s.platform === platform && s.group === group);
+        return `<section class="nav-group"><p class="nav-group-title">${platform.toUpperCase()} · ${group}</p>${items.map(s => `<button class="screen-link ${s.id === state.currentId ? 'active' : ''}" data-open="${s.id}"><span class="nav-icon">${s.icon}</span><span><strong>${s.title}</strong><small>${s.route}</small></span><em>›</em></button>`).join('')}</section>`;
+      }).join('');
+    }
+
+    function renderOverview() {
+      const list = visibleScreens();
+      if (!list.length) return `<div class="empty-state"><span>⌕</span><h2>검색 결과가 없어요</h2><p>화면 이름이나 경로를 바꿔서 다시 찾아보세요.</p></div>`;
+      return `<div class="overview-grid">${list.map(screen => `<article class="screen-card" data-open="${screen.id}"><div class="screen-card-preview ${screen.platform}"><div class="device-screen ${screen.platform}">${screenMarkup(screen)}</div></div><div class="card-copy"><div><h2>${screen.title}</h2><p>${screen.summary}</p></div><span class="route-pill">${screen.route}</span></div></article>`).join('')}</div>`;
+    }
+
+    function updateScale() {
+      const stage = document.querySelector('.prototype-stage');
+      const wrap = document.querySelector('.device-wrap');
+      const device = document.querySelector('.prototype-stage .device-screen');
+      if (!stage || !wrap || !device) return;
+      const screen = currentScreen();
+      const width = screen.platform === 'web' ? 1180 : 390;
+      const height = screen.platform === 'web' ? 720 : 844;
+      const availableWidth = Math.max(260, stage.clientWidth - 84);
+      const availableHeight = Math.max(520, window.innerHeight - 240);
+      const scale = state.fit ? Math.min(1, availableWidth / width, availableHeight / height) : 1;
+      document.documentElement.style.setProperty('--preview-scale', scale.toFixed(4));
+      wrap.style.width = `${Math.round(width * scale)}px`;
+      wrap.style.height = `${Math.round(height * scale)}px`;
+    }
+
+    function renderPrototype() {
+      const screen = currentScreen();
+      requestAnimationFrame(updateScale);
+      return `<div class="prototype-stage"><div class="device-wrap"><div class="device-screen ${screen.platform}">${screenMarkup(screen)}</div></div></div>`;
+    }
+
+    function renderFlow() {
+      const lanes = [
+        { platform: 'web', title: 'Web guest → planning → memory', ids: ['web-guest','web-create','web-invite','web-plan','web-dashboard','web-profile','web-journey'] },
+        { platform: 'web', title: 'Web Room flow', ids: ['web-room-join','web-room','web-create','web-plan'] },
+        { platform: 'mobile', title: 'Mobile setup → planning → memory', ids: ['mobile-config','mobile-home','mobile-create','mobile-plan','mobile-profile','mobile-journey'] },
+        { platform: 'mobile', title: 'Mobile invite & Room flow', ids: ['mobile-invite','mobile-plan','mobile-room-join','mobile-room','mobile-create'] }
+      ].filter(lane => state.platform === 'all' || lane.platform === state.platform);
+      return `<div class="flow-board">${lanes.map(lane => `<section class="flow-lane"><div class="flow-lane-heading"><h2>${lane.title}</h2><span>${lane.platform.toUpperCase()}</span></div><div class="flow-track">${lane.ids.map((id, index) => { const s = getScreen(id); return `${index ? '<span class="flow-arrow">→</span>' : ''}<button class="flow-node" data-open="${id}"><small>${String(index + 1).padStart(2,'0')}</small><b>${s.title}</b><span>${s.route}</span></button>`; }).join('')}</div><p class="branch-note">각 카드를 누르면 해당 화면의 클릭 가능한 프로토타입으로 이동합니다.</p></section>`).join('')}</div>`;
+    }
+
+    function renderTokens() {
+      const colors = [['Ink','#302725'],['Paper','#FFFAF4'],['Peach','#FFD8C4'],['Coral','#EC654B'],['Coral dark','#CF4C35'],['Yes','#348F5D'],['Maybe','#BD7B12'],['No','#C95146'],['Line','#DFD1C7']];
+      return `<div class="tokens-board"><section class="token-panel"><h2>Color</h2><div class="color-grid">${colors.map(([name,value]) => `<div class="color-token"><i style="background:${value}"></i><div><b>${name}</b><small>${value}</small></div></div>`).join('')}</div></section><div><section class="token-panel"><h2>Typography</h2><div class="type-sample"><small>Display · Black</small><div class="type-display">언제 만나서<br>뭐 할까?</div></div><div class="type-sample"><small>Heading · Bold</small><div class="type-heading">우리의 토요일</div></div><div class="type-sample"><small>Body · Regular</small><div class="type-body">친구들과 날짜와 할 일을 함께 정해요.</div></div></section><section class="token-panel" style="margin-top:18px"><h2>Components</h2><div class="component-stack"><button class="app-primary">약속 만들기 →</button><button class="app-secondary">초대 링크</button><span class="app-chip active">전체 8</span><span class="app-chip green">참석 가능</span><div class="preview-field" style="width:100%"><span>약속 이름</span><div>예: 토요일 성수 나들이</div></div></div></section></div></div>`;
+    }
+
+    function renderInspector() {
+      const screen = currentScreen();
+      inspector.innerHTML = `<section class="inspect-section"><p class="inspect-label">SELECTED SCREEN</p><h2>${screen.title}</h2><span class="inspect-route">${screen.route}</span><p>${screen.summary}</p></section><section class="inspect-section"><p class="inspect-label">TRANSITIONS</p><div class="transition-list">${screen.actions.map(([label,id]) => { const next = getScreen(id); return `<button class="transition-link" data-go="${id}"><span><strong>${label}</strong><small>${next.title}</small></span><b>→</b></button>`; }).join('')}</div></section><section class="inspect-section"><p class="inspect-label">SOURCE</p><div class="source-list">${screen.sources.map(source => `<code>${source}</code>`).join('')}</div></section><section class="inspect-section"><p class="inspect-label">KEYBOARD</p><div class="key-hints"><span>← 이전</span><span>→ 다음</span><span>F 맞춤</span><span>Esc 전체</span></div></section>`;
+    }
+
+    function render() {
+      document.querySelectorAll('.view-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.view === state.view));
+      document.querySelectorAll('.platform-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.platform === state.platform));
+      renderNav();
+      const screen = currentScreen();
+      if (state.view === 'overview') {
+        eyebrow.textContent = 'LIVE DOCUMENT'; heading.textContent = '전체 화면'; description.textContent = '현재 코드 기준의 웹·모바일 화면을 한곳에서 비교하고, 화면을 열어 실제 흐름처럼 이동할 수 있습니다.'; controls.hidden = true; workspace.innerHTML = renderOverview();
+      } else if (state.view === 'prototype') {
+        eyebrow.textContent = screen.platform.toUpperCase(); heading.textContent = screen.title; description.textContent = `${screen.route} · ${screen.summary}`; controls.hidden = false; workspace.innerHTML = renderPrototype();
+      } else if (state.view === 'flow') {
+        eyebrow.textContent = 'USER FLOW'; heading.textContent = '화면 흐름'; description.textContent = '시작, 생성·참여, 조율, 관계와 추억 기록으로 이어지는 경로를 플랫폼별로 확인합니다.'; controls.hidden = true; workspace.innerHTML = renderFlow();
+      } else {
+        eyebrow.textContent = 'FOUNDATIONS'; heading.textContent = '디자인 기준'; description.textContent = '웹 CSS와 Flutter 테마에 공통으로 사용되는 Aimasho의 색상, 타입과 핵심 UI 요소입니다.'; controls.hidden = true; workspace.innerHTML = renderTokens();
+      }
+      renderInspector();
+    }
+
+    function openScreen(id) {
+      if (!screens.some(screen => screen.id === id)) return;
+      state.currentId = id;
+      state.view = 'prototype';
+      render();
+    }
+
+    function moveScreen(offset) {
+      const screen = currentScreen();
+      const order = screens.filter(item => item.platform === screen.platform);
+      const index = order.findIndex(item => item.id === screen.id);
+      openScreen(order[(index + offset + order.length) % order.length].id);
+    }
+
+    document.addEventListener('click', event => {
+      const view = event.target.closest('[data-view]');
+      const platform = event.target.closest('[data-platform]');
+      const open = event.target.closest('[data-open]');
+      const go = event.target.closest('[data-go]');
+      if (view) { state.view = view.dataset.view; render(); return; }
+      if (platform) { state.platform = platform.dataset.platform; render(); return; }
+      if (open) { openScreen(open.dataset.open); return; }
+      if (go) { openScreen(go.dataset.go); }
+    });
+
+    document.querySelector('#screenSearch').addEventListener('input', event => { state.query = event.target.value; if (state.view !== 'overview') state.view = 'overview'; render(); });
+    document.querySelector('#previousScreen').addEventListener('click', () => moveScreen(-1));
+    document.querySelector('#nextScreen').addEventListener('click', () => moveScreen(1));
+    document.querySelector('#fitScreen').addEventListener('click', event => { state.fit = !state.fit; event.currentTarget.textContent = state.fit ? '화면 맞춤' : '100% 보기'; updateScale(); });
+    document.addEventListener('keydown', event => {
+      if (event.target.matches('input')) return;
+      if (event.key === 'ArrowLeft' && state.view === 'prototype') moveScreen(-1);
+      if (event.key === 'ArrowRight' && state.view === 'prototype') moveScreen(1);
+      if (event.key.toLowerCase() === 'f' && state.view === 'prototype') { state.fit = !state.fit; updateScale(); }
+      if (event.key === 'Escape') { state.view = 'overview'; render(); }
+    });
+    window.addEventListener('resize', updateScale);
+
+    render();
+  </script>
+</body>
+</html>

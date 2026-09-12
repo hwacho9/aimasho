@@ -20,8 +20,14 @@ class _JoinMeetupScreenState extends ConsumerState<JoinMeetupScreen> {
   @override
   void initState() {
     super.initState();
-    _preview =
-        ref.read(meetupRepositoryProvider).getInvitePreview(widget.meetupId);
+    _preview = _initialize();
+  }
+
+  Future<InvitePreview> _initialize() async {
+    final repository = ref.read(meetupRepositoryProvider);
+    final user = await repository.ensureAnonymousUser();
+    if (user.displayName?.isNotEmpty == true) _name.text = user.displayName!;
+    return repository.getInvitePreview(widget.meetupId);
   }
 
   @override

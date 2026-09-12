@@ -1,11 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../app/theme.dart';
 import '../../models/meetup.dart';
+import '../../presentation/meetup_presentation.dart';
 import '../../providers/meetup_providers.dart';
 import 'meetup_lifecycle.dart';
+import '../social/memory_notes_panel.dart';
+
+part 'meetup_management_section.dart';
+part 'meetup_planning_sections.dart';
+part 'meetup_schedule_sections.dart';
 
 class MeetupScreen extends ConsumerWidget {
   const MeetupScreen({super.key, required this.meetupId});
@@ -30,6 +39,20 @@ class MeetupScreen extends ConsumerWidget {
         final isHost = mine?.isHost ?? false;
         final recommendation = ref.watch(recommendationProvider(meetupId));
         final relationships = ref.watch(meetupRelationshipsProvider(meetupId));
+        final scheduleOpen = detail.meetup.canEditScheduleAt(DateTime.now());
+        CandidateSlot? confirmedSlot;
+        if (detail.meetup.confirmedDateTime != null) {
+          for (final slot in detail.candidateSlots) {
+            if (slot.startDateTime.toUtc() ==
+                detail.meetup.confirmedDateTime!.toUtc()) {
+              confirmedSlot = slot;
+              break;
+            }
+          }
+        }
+        final otherSlots = detail.candidateSlots
+            .where((slot) => slot.id != confirmedSlot?.id)
+            .toList();
         return Scaffold(
           appBar: AppBar(
               title: const Text('aimasho',
@@ -46,8 +69,18 @@ class MeetupScreen extends ConsumerWidget {
                   _Header(
                       detail: detail,
                       relationships: relationships.valueOrNull ?? const []),
-                  if (isHost && !detail.meetup.isConfirmed)
-                    _InviteHint(meetupId: meetupId),
+                  if (detail.meetup.previousConfirmedDateTime != null &&
+                      detail.meetup.confirmedDateTime != null)
+                    _ScheduleChangedNotice(
+                        previous: detail.meetup.previousConfirmedDateTime!,
+                        current: detail.meetup.confirmedDateTime!),
+                  if (!detail.meetup.isFinished)
+                    _InviteHint(meetupId: meetupId, title: detail.meetup.title),
+                  if (!detail.meetup.isConfirmed &&
+                      detail.meetup.responseDeadline != null)
+                    _ResponseDeadlineNotice(
+                        deadline: detail.meetup.responseDeadline!,
+                        passed: !scheduleOpen),
                   const SizedBox(height: 25),
                   Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -78,14 +111,64 @@ class MeetupScreen extends ConsumerWidget {
                                 color: AimashoColors.muted, fontSize: 12))
                       ]),
                   const SizedBox(height: 12),
-                  ...detail.candidateSlots.map((slot) => _ScheduleCard(
-                      meetupId: meetupId,
-                      detail: detail,
-                      slot: slot,
-                      uid: uid,
-                      recommendation: recommendation.valueOrNull,
-                      onChanged: () =>
-                          ref.invalidate(recommendationProvider(meetupId)))),
+                  if (confirmedSlot != null)
+                    _ScheduleCard(
+                        meetupId: meetupId,
+                        detail: detail,
+                        slot: confirmedSlot,
+                        uid: uid,
+                        recommendation: recommendation.valueOrNull,
+                        onChanged: () =>
+                            ref.invalidate(recommendationProvider(meetupId)))
+                  else
+                    ...detail.candidateSlots.map((slot) => _ScheduleCard(
+                        meetupId: meetupId,
+                        detail: detail,
+                        slot: slot,
+                        uid: uid,
+                        recommendation: recommendation.valueOrNull,
+                        onChanged: () =>
+                            ref.invalidate(recommendationProvider(meetupId)))),
+                  if (detail.meetup.isConfirmed && otherSlots.isNotEmpty)
+                    Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                            border: Border.all(color: AimashoColors.line),
+                            borderRadius: BorderRadius.circular(16)),
+                        child: ExpansionTile(
+                            title: const Text('투표 결과와 다른 후보',
+                                style: TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.w800)),
+                            subtitle: Text(
+                                '${otherSlots.length}개 · 언제든 내 선택 수정',
+                                style: const TextStyle(fontSize: 11)),
+                            childrenPadding: const EdgeInsets.all(10),
+                            children: otherSlots
+                                .map((slot) => _ScheduleCard(
+                                    meetupId: meetupId,
+                                    detail: detail,
+                                    slot: slot,
+                                    uid: uid,
+                                    recommendation: recommendation.valueOrNull,
+                                    onChanged: () => ref.invalidate(
+                                        recommendationProvider(meetupId))))
+                                .toList())),
+                  if (scheduleOpen &&
+                      (isHost || detail.meetup.allowParticipantSlotAdd))
+                    _AddCandidateSlotCard(meetupId: meetupId),
+                  if (detail.meetup.isConfirmed && mine != null)
+                    _ConfirmedScheduleAvailabilityCard(
+                        meetupId: meetupId,
+                        availability: mine.confirmedScheduleAvailability,
+                        changed:
+                            detail.meetup.previousConfirmedDateTime != null),
+                  if (!detail.meetup.isFinished &&
+                      detail.meetup.confirmedDateTime != null &&
+                      detail.meetup.confirmedDateTime!
+                          .isAfter(DateTime.now()) &&
+                      mine != null)
+                    _MeetupReminderCard(
+                        meetupId: meetupId, enabled: mine.remindersEnabled),
                   if (isHost &&
                       detail.meetup.isConfirmed &&
                       detail.meetup.confirmedDateTime != null)
@@ -100,11 +183,30 @@ class MeetupScreen extends ConsumerWidget {
                         meetupId: meetupId,
                         recommended: recommendation.value!.recommended!,
                         busy: false),
+                  if (detail.meetup.contentVoteConfig.isEnabled)
+                    _ContentVotingPanel(
+                        meetupId: meetupId,
+                        detail: detail,
+                        uid: uid,
+                        isHost: isHost),
+                  _EventPlanPanel(
+                      meetupId: meetupId,
+                      detail: detail,
+                      uid: uid,
+                      canEdit: isHost || detail.meetup.allowPlanEditing),
                   MeetupLifecycle(
                       meetupId: meetupId,
                       detail: detail,
                       currentUid: uid,
                       isHost: isHost),
+                  if (detail.meetup.status == 'COMPLETED')
+                    Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: MemoryNotesPanel(
+                            key: ValueKey('$meetupId:$uid'),
+                            meetupId: meetupId)),
+                  if (isHost)
+                    _MeetupManagementPanel(meetupId: meetupId, detail: detail),
                 ]),
           ),
         );
@@ -198,8 +300,7 @@ class _Header extends StatelessWidget {
                                       fontSize: 12,
                                       fontWeight: FontWeight.w700))),
                           Text(
-                              _relationshipLabel(
-                                  relationship.sharedMeetupCount),
+                              relationshipLabel(relationship.sharedMeetupCount),
                               style: const TextStyle(
                                   color: AimashoColors.coral,
                                   fontSize: 10,
@@ -210,16 +311,12 @@ class _Header extends StatelessWidget {
   }
 }
 
-String _relationshipLabel(int sharedMeetupCount) {
-  if (sharedMeetupCount >= 8) return '찐친';
-  if (sharedMeetupCount >= 4) return '자주 만나는 친구';
-  if (sharedMeetupCount >= 2) return '함께 만나는 사이';
-  return '새로운 친구';
-}
-
 class _InviteHint extends StatelessWidget {
-  const _InviteHint({required this.meetupId});
+  const _InviteHint({required this.meetupId, required this.title});
   final String meetupId;
+  final String title;
+  String get _url => 'https://aimasho.web.app/m/$meetupId';
+
   @override
   Widget build(BuildContext context) => Container(
       margin: const EdgeInsets.only(top: 22),
@@ -231,14 +328,34 @@ class _InviteHint extends StatelessWidget {
         const Text('✦  친구를 초대해주세요',
             style: TextStyle(fontWeight: FontWeight.w800)),
         const SizedBox(height: 6),
-        const Text('공유 링크를 열면 로그인 없이 바로 투표할 수 있어요.',
+        const Text('공유 링크를 열면 로그인 없이 바로 참여하고 투표할 수 있어요.',
             style: TextStyle(fontSize: 12, color: AimashoColors.muted)),
         const SizedBox(height: 10),
-        SelectableText('https://aimasho.app/m/$meetupId',
+        SelectableText(_url,
             style: const TextStyle(
                 fontSize: 12,
                 color: AimashoColors.coral,
-                fontWeight: FontWeight.w700))
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+              child: OutlinedButton.icon(
+                  onPressed: () => Share.share('$title 약속에 초대해요!\n$_url',
+                      subject: '$title · aimasho 약속 초대'),
+                  icon: const Icon(Icons.ios_share_rounded, size: 17),
+                  label: const Text('초대 보내기'))),
+          const SizedBox(width: 8),
+          IconButton.outlined(
+              tooltip: '링크 복사',
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: _url));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('초대 링크를 복사했어요.')));
+                }
+              },
+              icon: const Icon(Icons.link_rounded))
+        ])
       ]));
 }
 
@@ -247,332 +364,4 @@ Participant? _participantFor(List<Participant> participants, String? uid) {
     if (participant.uid == uid) return participant;
   }
   return null;
-}
-
-class _ScheduleCard extends ConsumerStatefulWidget {
-  const _ScheduleCard(
-      {required this.meetupId,
-      required this.detail,
-      required this.slot,
-      required this.uid,
-      required this.recommendation,
-      required this.onChanged});
-  final String meetupId;
-  final MeetupDetail detail;
-  final CandidateSlot slot;
-  final String? uid;
-  final Recommendation? recommendation;
-  final VoidCallback onChanged;
-  @override
-  ConsumerState<_ScheduleCard> createState() => _ScheduleCardState();
-}
-
-class _ScheduleCardState extends ConsumerState<_ScheduleCard> {
-  bool _saving = false;
-  Future<void> _vote(VoteStatus status) async {
-    setState(() => _saving = true);
-    try {
-      await ref
-          .read(meetupRepositoryProvider)
-          .submitVote(widget.meetupId, widget.slot.id, status);
-      widget.onChanged();
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('투표를 저장하지 못했어요: $error')));
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final result = widget.recommendation?.ranking
-        .where((item) => item.id == widget.slot.id)
-        .fold<RecommendationSlot?>(null, (_, item) => item);
-    final recommended =
-        widget.recommendation?.recommended?.id == widget.slot.id &&
-            !widget.detail.meetup.isConfirmed;
-    final myVote = widget.detail.votes
-        .where((vote) =>
-            vote.participantUid == widget.uid && vote.slotId == widget.slot.id)
-        .fold<AvailabilityVote?>(null, (_, vote) => vote);
-    final confirmed = widget.detail.meetup.confirmedDateTime?.toUtc() ==
-        widget.slot.startDateTime.toUtc();
-    final votesForSlot = widget.detail.votes
-        .where((vote) => vote.slotId == widget.slot.id)
-        .toList();
-    final participantNames = {
-      for (final participant in widget.detail.participants)
-        participant.uid: participant.displayName
-    };
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-          color: confirmed
-              ? const Color(0xFFF6FCF8)
-              : recommended
-                  ? const Color(0xFFFFFAF2)
-                  : const Color(0xFFFFFEFB),
-          borderRadius: BorderRadius.circular(19),
-          border: Border.all(
-              color: confirmed
-                  ? const Color(0xFF7BBB96)
-                  : recommended
-                      ? const Color(0xFFF29A64)
-                      : AimashoColors.line,
-              width: recommended ? 2 : 1)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-              child: Text(
-                  MeetupScreen._dateFormat.format(widget.slot.startDateTime),
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w800))),
-          if (recommended)
-            Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                    color: const Color(0xFFFFF0D9),
-                    borderRadius: BorderRadius.circular(99)),
-                child: const Text('aimasho 추천',
-                    style: TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFFD97938),
-                        fontWeight: FontWeight.w800)))
-        ]),
-        if (result != null)
-          Padding(
-              padding: const EdgeInsets.only(top: 11),
-              child: Row(children: [
-                Text('○ ${result.yes}',
-                    style: const TextStyle(
-                        color: AimashoColors.green,
-                        fontWeight: FontWeight.w800)),
-                const SizedBox(width: 12),
-                Text('△ ${result.maybe}',
-                    style: const TextStyle(
-                        color: AimashoColors.yellow,
-                        fontWeight: FontWeight.w800)),
-                const SizedBox(width: 12),
-                Text('× ${result.no}',
-                    style: const TextStyle(
-                        color: AimashoColors.red, fontWeight: FontWeight.w800)),
-                if (result.no == 0 &&
-                    result.yes == widget.detail.participants.length)
-                  const Spacer(),
-                if (result.no == 0 &&
-                    result.yes == widget.detail.participants.length)
-                  const Text('모두 가능해요!',
-                      style: TextStyle(
-                          fontSize: 11,
-                          color: AimashoColors.green,
-                          fontWeight: FontWeight.w800))
-              ])),
-        if (votesForSlot.isNotEmpty)
-          Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: votesForSlot.map((vote) {
-                    final color = switch (vote.status) {
-                      VoteStatus.yes => AimashoColors.green,
-                      VoteStatus.maybe => AimashoColors.yellow,
-                      VoteStatus.no => AimashoColors.red
-                    };
-                    final background = switch (vote.status) {
-                      VoteStatus.yes => const Color(0xFFEAF8EF),
-                      VoteStatus.maybe => const Color(0xFFFFF6DF),
-                      VoteStatus.no => const Color(0xFFFFF0EE)
-                    };
-                    return Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 5),
-                        decoration: BoxDecoration(
-                            color: background,
-                            borderRadius: BorderRadius.circular(99)),
-                        child: Text(
-                            '${vote.status.symbol} ${participantNames[vote.participantUid] ?? '알 수 없음'}',
-                            style: TextStyle(
-                                color: color,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700)));
-                  }).toList())),
-        if (!widget.detail.meetup.isConfirmed && widget.uid != null)
-          Padding(
-              padding: const EdgeInsets.only(top: 14),
-              child: _VoteSelector(
-                  value: myVote?.status, saving: _saving, onSelect: _vote)),
-      ]),
-    );
-  }
-}
-
-class _ScheduleChangeCard extends ConsumerStatefulWidget {
-  const _ScheduleChangeCard(
-      {required this.meetupId, required this.confirmedDateTime});
-  final String meetupId;
-  final DateTime confirmedDateTime;
-  @override
-  ConsumerState<_ScheduleChangeCard> createState() =>
-      _ScheduleChangeCardState();
-}
-
-class _ScheduleChangeCardState extends ConsumerState<_ScheduleChangeCard> {
-  bool _saving = false;
-
-  Future<void> _change() async {
-    final initial = widget.confirmedDateTime.toLocal();
-    final date = await showDatePicker(
-        context: context,
-        initialDate: initial,
-        firstDate: DateTime(2020),
-        lastDate: DateTime(2100));
-    if (date == null || !mounted) return;
-    final time = await showTimePicker(
-        context: context, initialTime: TimeOfDay.fromDateTime(initial));
-    if (time == null || !mounted) return;
-    final next =
-        DateTime(date.year, date.month, date.day, time.hour, time.minute);
-    setState(() => _saving = true);
-    try {
-      await ref
-          .read(meetupRepositoryProvider)
-          .updateConfirmedSchedule(widget.meetupId, next);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('집합 시간을 변경했어요. 출발 경로를 다시 계산해 주세요.')));
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('집합 시간을 변경하지 못했어요: $error')));
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Container(
-      margin: const EdgeInsets.only(top: 4, bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-          color: const Color(0xFFFFF5ED),
-          border: Border.all(color: const Color(0xFFE7C1AF)),
-          borderRadius: BorderRadius.circular(18)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('HOST SETTINGS',
-            style: TextStyle(
-                color: AimashoColors.coral,
-                fontSize: 11,
-                letterSpacing: 1.1,
-                fontWeight: FontWeight.w800)),
-        const SizedBox(height: 5),
-        const Text('집합 날짜·시간 변경',
-            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-        const SizedBox(height: 5),
-        const Text('변경 후 출발 경로와 알림은 새 시간 기준으로 다시 계산해 주세요.',
-            style: TextStyle(color: AimashoColors.muted, fontSize: 12)),
-        const SizedBox(height: 13),
-        OutlinedButton.icon(
-            onPressed: _saving ? null : _change,
-            icon: const Icon(Icons.edit_calendar_outlined, size: 18),
-            label: Text(_saving ? '변경 중...' : '집합 시간 변경'))
-      ]));
-}
-
-class _VoteSelector extends StatelessWidget {
-  const _VoteSelector(
-      {required this.value, required this.saving, required this.onSelect});
-  final VoteStatus? value;
-  final bool saving;
-  final ValueChanged<VoteStatus> onSelect;
-  @override
-  Widget build(BuildContext context) => Row(
-          children: VoteStatus.values.map((status) {
-        final selected = status == value;
-        final color = switch (status) {
-          VoteStatus.yes => AimashoColors.green,
-          VoteStatus.maybe => AimashoColors.yellow,
-          VoteStatus.no => AimashoColors.red
-        };
-        return Expanded(
-            child: Padding(
-                padding:
-                    EdgeInsets.only(left: status == VoteStatus.yes ? 0 : 6),
-                child: OutlinedButton(
-                    onPressed: saving ? null : () => onSelect(status),
-                    style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 43),
-                        foregroundColor: selected ? color : AimashoColors.muted,
-                        backgroundColor:
-                            selected ? color.withOpacity(.11) : Colors.white,
-                        side: BorderSide(
-                            color: selected ? color : AimashoColors.line),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12))),
-                    child: Text('${status.symbol} ${status.label}',
-                        style: const TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w800)))));
-      }).toList());
-}
-
-class _RecommendationCard extends ConsumerStatefulWidget {
-  const _RecommendationCard(
-      {required this.meetupId, required this.recommended, required this.busy});
-  final String meetupId;
-  final RecommendationSlot recommended;
-  final bool busy;
-  @override
-  ConsumerState<_RecommendationCard> createState() =>
-      _RecommendationCardState();
-}
-
-class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
-  bool _confirming = false;
-  Future<void> _confirm() async {
-    setState(() => _confirming = true);
-    try {
-      await ref
-          .read(meetupRepositoryProvider)
-          .confirmSchedule(widget.meetupId, widget.recommended.id);
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('일정을 확정하지 못했어요: $error')));
-      }
-    } finally {
-      if (mounted) setState(() => _confirming = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.all(21),
-      decoration: BoxDecoration(
-          color: const Color(0xFFFCE8D9),
-          borderRadius: BorderRadius.circular(21)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('✦  AIMASHO PICK',
-            style: TextStyle(
-                color: AimashoColors.coral,
-                fontSize: 11,
-                letterSpacing: 1.1,
-                fontWeight: FontWeight.w800)),
-        const SizedBox(height: 7),
-        Text(MeetupScreen._dateFormat.format(widget.recommended.startDateTime),
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 5),
-        const Text('불가능한 사람이 가장 적고, 가장 많은 친구가 참여할 수 있어요.',
-            style: TextStyle(fontSize: 12, color: AimashoColors.muted)),
-        const SizedBox(height: 18),
-        ElevatedButton(
-            onPressed: _confirming ? null : _confirm,
-            child: Text(_confirming ? '확정 중...' : '이 일정으로 결정'))
-      ]));
 }

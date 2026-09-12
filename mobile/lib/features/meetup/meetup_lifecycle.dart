@@ -2,7 +2,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/theme.dart';
 import '../../models/meetup.dart';
@@ -22,36 +21,21 @@ class MeetupLifecycle extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    switch (detail.meetup.status) {
-      case 'SCHEDULE_CONFIRMED':
-      case 'LOCATION_COLLECTING':
-        return OriginPanel(
+    if (!detail.meetup.isConfirmed) return const SizedBox.shrink();
+    return Column(children: [
+      if (detail.meetup.collectOrigins && !detail.meetup.isFinished)
+        OriginPanel(
             meetupId: meetupId,
             detail: detail,
             currentUid: currentUid,
-            isHost: isHost);
-      case 'LOCATION_SELECTING':
-        return LocationPanel(meetupId: meetupId, isHost: isHost);
-      case 'LOCATION_CONFIRMED':
-        return RoutesPanel(
-            meetupId: meetupId,
-            detail: detail,
-            currentUid: currentUid,
-            isHost: isHost);
-      case 'READY':
-        return Column(children: [
-          RoutesPanel(
-              meetupId: meetupId,
-              detail: detail,
-              currentUid: currentUid,
-              isHost: isHost),
-          const SizedBox(height: 18),
-          ExpensesPanel(
-              meetupId: meetupId, detail: detail, currentUid: currentUid)
-        ]);
-      default:
-        return const SizedBox.shrink();
-    }
+            isHost: isHost),
+      if (!detail.meetup.isFinished)
+        LocationPanel(meetupId: meetupId, detail: detail, isHost: isHost),
+      if (detail.meetup.meetingPlace != null)
+        MeetingPlaceReadyPanel(detail: detail),
+      const SizedBox(height: 18),
+      ExpensesPanel(meetupId: meetupId, detail: detail, currentUid: currentUid)
+    ]);
   }
 }
 
@@ -227,7 +211,7 @@ class _OriginPanelState extends ConsumerState<OriginPanel> {
         title: '어디서 출발하나요?',
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const Text('정확한 위치는 다른 참가자에게 보이지 않으며, 장소와 경로 계산에만 사용돼요.',
+          const Text('정확한 좌표는 공개되지 않지만, 경로 안내에는 선택한 출발지 이름이 참가자에게 표시돼요.',
               style: TextStyle(
                   color: AimashoColors.muted, fontSize: 12, height: 1.6)),
           const SizedBox(height: 14),
@@ -278,8 +262,12 @@ class _OriginPanelState extends ConsumerState<OriginPanel> {
 
 class LocationPanel extends ConsumerStatefulWidget {
   const LocationPanel(
-      {super.key, required this.meetupId, required this.isHost});
+      {super.key,
+      required this.meetupId,
+      required this.detail,
+      required this.isHost});
   final String meetupId;
+  final MeetupDetail detail;
   final bool isHost;
   @override
   ConsumerState<LocationPanel> createState() => _LocationPanelState();
@@ -300,8 +288,8 @@ class _LocationPanelState extends ConsumerState<LocationPanel> {
           .meetingPointRecommendations(widget.meetupId, mode);
     } catch (error) {
       if (mounted)
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('추천을 찾지 못했어요: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('중간지점 이동 시간을 계산하지 못했어요. 잠시 후 다시 시도해 주세요.')));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -323,210 +311,93 @@ class _LocationPanelState extends ConsumerState<LocationPanel> {
   }
 
   @override
-  Widget build(BuildContext context) => Panel(
-      eyebrow: 'STEP 2 · PLACE',
-      title: '어디서 만날까요?',
-      child: !widget.isHost
-          ? const Text('호스트가 만날 장소를 고르고 있어요.',
-              style: TextStyle(color: AimashoColors.muted))
-          : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'FAIR', label: Text('⚖️ 공평하게')),
-                    ButtonSegment(value: 'FAST', label: Text('⚡ 빠르게'))
-                  ],
-                  selected: {
-                    _mode
-                  },
-                  onSelectionChanged:
-                      _loading ? null : (value) => _recommend(value.first)),
-              const SizedBox(height: 12),
-              OutlinedButton(
-                  onPressed: _loading ? null : () => _recommend(_mode),
-                  child: Text(_loading ? '추천 계산 중...' : '✨ 중간지점 추천')),
-              const SizedBox(height: 14),
-              const Text('또는 직접 장소 정하기',
-                  style: TextStyle(fontSize: 12, color: AimashoColors.muted)),
-              const SizedBox(height: 7),
-              PlaceSearch(hint: '장소 검색', onPick: _choose),
-              ..._candidates.asMap().entries.map((entry) {
-                final place = entry.value;
-                return Container(
-                    margin: const EdgeInsets.only(top: 10),
-                    padding: const EdgeInsets.all(13),
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFFFF5ED),
-                        borderRadius: BorderRadius.circular(15)),
-                    child: Row(children: [
-                      Expanded(
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                            Text(
-                                entry.key == 0
-                                    ? '🥇 AIMASHO PICK'
-                                    : '후보 ${entry.key + 1}',
-                                style: const TextStyle(
-                                    fontSize: 10,
-                                    color: AimashoColors.coral,
-                                    fontWeight: FontWeight.w800)),
-                            Text(place.name,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w800)),
-                            Text(
-                                '평균 ${place.averageDurationMinutes}분 · 최장 ${place.maxDurationMinutes}분',
-                                style: const TextStyle(
-                                    fontSize: 11, color: AimashoColors.muted))
-                          ])),
-                      FilledButton(
-                          onPressed: _loading ? null : () => _choose(place),
-                          child: const Text('여기서'))
-                    ]));
-              })
-            ]));
-}
-
-class RoutesPanel extends ConsumerStatefulWidget {
-  const RoutesPanel(
-      {super.key,
-      required this.meetupId,
-      required this.detail,
-      required this.currentUid,
-      required this.isHost});
-  final String meetupId;
-  final MeetupDetail detail;
-  final String? currentUid;
-  final bool isHost;
-  @override
-  ConsumerState<RoutesPanel> createState() => _RoutesPanelState();
-}
-
-class _RoutesPanelState extends ConsumerState<RoutesPanel> {
-  bool _loading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _registerDepartureNotifications();
-  }
-
-  @override
-  void didUpdateWidget(covariant RoutesPanel oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.detail.routes.isEmpty && widget.detail.routes.isNotEmpty) {
-      _registerDepartureNotifications();
-    }
-  }
-
-  Future<void> _registerDepartureNotifications() async {
-    try {
-      await ref
-          .read(meetupRepositoryProvider)
-          .registerDepartureNotifications(widget.meetupId);
-    } catch (_) {
-      // Notification setup must never block reviewing the route.
-    }
-  }
-
-  Future<void> _calculate() async {
-    setState(() => _loading = true);
-    try {
-      await ref.read(meetupRepositoryProvider).calculateRoutes(widget.meetupId);
-    } catch (error) {
-      if (mounted)
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('경로를 계산하지 못했어요: $error')));
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  String _clock(DateTime? date) =>
-      date == null ? '—' : TimeOfDay.fromDateTime(date).format(context);
-  @override
   Widget build(BuildContext context) {
-    if (widget.detail.routes.isEmpty)
-      return Panel(
-          eyebrow: 'STEP 3 · ROUTES',
-          title: '각자의 출발 시간을 계산할게요',
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text(
-                '${widget.detail.meetup.meetingPlace?.name ?? ''}에 약속 10분 전 도착하도록 맞춰드려요.',
-                style: const TextStyle(color: AimashoColors.muted)),
-            const SizedBox(height: 14),
-            if (widget.isHost)
-              ElevatedButton(
-                  onPressed: _loading ? null : _calculate,
-                  child: Text(_loading ? '경로 계산 중...' : '🚃 출발 시간 계산'))
-            else
-              const Text('호스트가 경로를 계산하면 여기에서 확인할 수 있어요.',
-                  style: TextStyle(fontSize: 12, color: AimashoColors.muted))
-          ]));
-    final mine = widget.detail.routes
-        .where((item) => item.participantUid == widget.currentUid)
-        .cast<ParticipantRoute?>()
-        .firstWhere((item) => item != null, orElse: () => null);
+    final originCount =
+        widget.detail.participants.where((item) => item.hasOrigin).length;
+    final canRecommend = originCount >= 2;
     return Panel(
-        eyebrow: 'READY TO GO',
-        title: '${widget.detail.meetup.meetingPlace?.name ?? '약속 장소'}에서 만나요',
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text('목표 도착  ${_clock(widget.detail.meetup.targetArrivalTime)}',
-              style: const TextStyle(color: AimashoColors.muted)),
-          if (mine != null)
-            Container(
-                margin: const EdgeInsets.only(top: 13),
-                padding: const EdgeInsets.all(15),
-                decoration: BoxDecoration(
-                    color: const Color(0xFFFFF1E5),
-                    borderRadius: BorderRadius.circular(15)),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('🚃 ${_clock(mine.departureTime)}에 출발하세요',
-                          style: const TextStyle(fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 5),
-                      Text(mine.routeSummary),
-                      Text(
-                          '약 ${mine.durationMinutes}분 · ${_clock(mine.arrivalTime)} 도착 예정',
+        eyebrow: 'STEP 2 · PLACE',
+        title: '어디서 만날까요?',
+        child: !widget.isHost
+            ? const Text('호스트가 만날 장소를 고르고 있어요.',
+                style: TextStyle(color: AimashoColors.muted))
+            : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'FAIR', label: Text('⚖️ 공평하게')),
+                      ButtonSegment(value: 'FAST', label: Text('⚡ 빠르게'))
+                    ],
+                    selected: {
+                      _mode
+                    },
+                    onSelectionChanged:
+                        _loading ? null : (value) => _recommend(value.first)),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                    onPressed: _loading || !canRecommend
+                        ? null
+                        : () => _recommend(_mode),
+                    child: Text(_loading ? '추천 계산 중...' : '✨ 중간지점 추천')),
+                if (!canRecommend)
+                  Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                          '중간지점 추천은 출발지 2개 이상이 등록되면 사용할 수 있어요. ($originCount개)',
                           style: const TextStyle(
-                              fontSize: 12, color: AimashoColors.muted)),
-                      const Text(
-                          'Google Maps는 현재 시각 기준으로 표시될 수 있어요. 출발 시각은 위 안내를 기준으로 확인해주세요.',
-                          style: TextStyle(
-                              fontSize: 11, color: AimashoColors.muted)),
-                      const Text('알림 권한을 허용하면 출발 시간에 알려드려요.',
-                          style: TextStyle(
-                              fontSize: 11, color: AimashoColors.muted)),
-                      TextButton(
-                          onPressed: () => launchUrl(
-                              Uri.parse(mine.externalMapsUrl),
-                              mode: LaunchMode.externalApplication),
-                          child: const Text('Google Maps에서 경로 다시 확인 ↗'))
-                    ])),
-          const SizedBox(height: 10),
-          ...widget.detail.routes.map((route) {
-            final person = widget.detail.participants
-                .where((item) => item.uid == route.participantUid)
-                .cast<Participant?>()
-                .firstWhere((item) => item != null, orElse: () => null);
-            return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(children: [
-                  Expanded(child: Text(person?.displayName ?? '참가자')),
-                  Text(_clock(route.departureTime),
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                  const SizedBox(width: 9),
-                  Text('${route.durationMinutes}분',
-                      style: const TextStyle(color: AimashoColors.muted)),
-                  const SizedBox(width: 9),
-                  Text(_clock(route.arrivalTime),
-                      style: const TextStyle(fontWeight: FontWeight.w800))
-                ]));
-          })
-        ]));
+                              color: AimashoColors.muted, fontSize: 11))),
+                const SizedBox(height: 14),
+                const Text('또는 직접 장소 정하기',
+                    style: TextStyle(fontSize: 12, color: AimashoColors.muted)),
+                const SizedBox(height: 7),
+                PlaceSearch(hint: '장소 검색', onPick: _choose),
+                ..._candidates.asMap().entries.map((entry) {
+                  final place = entry.value;
+                  return Container(
+                      margin: const EdgeInsets.only(top: 10),
+                      padding: const EdgeInsets.all(13),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFFFF5ED),
+                          borderRadius: BorderRadius.circular(15)),
+                      child: Row(children: [
+                        Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text(
+                                  entry.key == 0
+                                      ? '🥇 AIMASHO PICK'
+                                      : '후보 ${entry.key + 1}',
+                                  style: const TextStyle(
+                                      fontSize: 10,
+                                      color: AimashoColors.coral,
+                                      fontWeight: FontWeight.w800)),
+                              Text(place.name,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800)),
+                              Text(
+                                  '평균 ${place.averageDurationMinutes}분 · 최장 ${place.maxDurationMinutes}분',
+                                  style: const TextStyle(
+                                      fontSize: 11, color: AimashoColors.muted))
+                            ])),
+                        FilledButton(
+                            onPressed: _loading ? null : () => _choose(place),
+                            child: const Text('여기서'))
+                      ]));
+                })
+              ]));
   }
+}
+
+class MeetingPlaceReadyPanel extends StatelessWidget {
+  const MeetingPlaceReadyPanel({super.key, required this.detail});
+  final MeetupDetail detail;
+  @override
+  Widget build(BuildContext context) => Panel(
+      eyebrow: 'MEETING PLACE',
+      title: '${detail.meetup.meetingPlace?.name ?? '약속 장소'}에서 만나요',
+      child: const Text(
+          '출발·도착 시간 계산과 출발 알림은 현재 비활성화되어 있어요. 실제 이동 경로와 시간은 지도 앱에서 확인해 주세요.',
+          style: TextStyle(color: AimashoColors.muted)));
 }
 
 class ExpensesPanel extends ConsumerStatefulWidget {
@@ -549,6 +420,7 @@ class _ExpensesPanelState extends ConsumerState<ExpensesPanel> {
   late Set<String> _sharers;
   bool _saving = false;
   Settlement? _settlement;
+  Expense? _editing;
 
   @override
   void initState() {
@@ -564,7 +436,25 @@ class _ExpensesPanelState extends ConsumerState<ExpensesPanel> {
     super.dispose();
   }
 
-  Future<void> _add() async {
+  void _resetForm() {
+    _editing = null;
+    _title.clear();
+    _amount.clear();
+    _paidBy = widget.currentUid ?? widget.detail.participants.first.uid;
+    _sharers = widget.detail.participants.map((item) => item.uid).toSet();
+  }
+
+  void _startEditing(Expense expense) {
+    setState(() {
+      _editing = expense;
+      _title.text = expense.title;
+      _amount.text = expense.amount.toString();
+      _paidBy = expense.paidByUid;
+      _sharers = expense.participantUids.toSet();
+    });
+  }
+
+  Future<void> _save() async {
     final amount = int.tryParse(_amount.text);
     if (_title.text.trim().isEmpty ||
         amount == null ||
@@ -572,18 +462,60 @@ class _ExpensesPanelState extends ConsumerState<ExpensesPanel> {
         _sharers.isEmpty) return;
     setState(() => _saving = true);
     try {
-      await ref.read(meetupRepositoryProvider).createExpense(widget.meetupId,
-          title: _title.text.trim(),
-          amount: amount,
-          paidByUid: _paidBy,
-          participantUids: _sharers.toList());
-      _title.clear();
-      _amount.clear();
+      if (_editing == null) {
+        await ref.read(meetupRepositoryProvider).createExpense(widget.meetupId,
+            title: _title.text.trim(),
+            amount: amount,
+            paidByUid: _paidBy,
+            participantUids: _sharers.toList());
+      } else {
+        await ref.read(meetupRepositoryProvider).updateExpense(
+            widget.meetupId, _editing!.id,
+            title: _title.text.trim(),
+            amount: amount,
+            paidByUid: _paidBy,
+            participantUids: _sharers.toList());
+      }
+      if (mounted) setState(_resetForm);
       await _showResult();
     } catch (error) {
       if (mounted)
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('비용을 등록하지 못했어요: $error')));
+            .showSnackBar(SnackBar(content: Text('비용을 저장하지 못했어요: $error')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _delete(Expense expense) async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('지출을 삭제할까요?'),
+            content: Text('‘${expense.title}’ 항목이 삭제됩니다.'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('취소')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('삭제')),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(meetupRepositoryProvider)
+          .deleteExpense(widget.meetupId, expense.id);
+      if (mounted && _editing?.id == expense.id) setState(_resetForm);
+      await _showResult();
+    } catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('비용을 삭제하지 못했어요: $error')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -649,20 +581,50 @@ class _ExpensesPanelState extends ConsumerState<ExpensesPanel> {
                           })))
                   .toList()),
           const SizedBox(height: 12),
+          if (_editing != null) ...[
+            Text('‘${_editing!.title}’ 수정 중',
+                style: const TextStyle(
+                    color: AimashoColors.coral, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+          ],
           OutlinedButton(
-              onPressed: _saving ? null : _add,
-              child: Text(_saving ? '등록 중...' : '비용 추가')),
+              onPressed: _saving ? null : _save,
+              child: Text(_saving
+                  ? '저장 중...'
+                  : _editing == null
+                      ? '비용 추가'
+                      : '지출 수정 저장')),
+          if (_editing != null)
+            TextButton(
+                onPressed: _saving ? null : () => setState(_resetForm),
+                child: const Text('수정 취소')),
           if (widget.detail.expenses.isNotEmpty) ...[
             const SizedBox(height: 10),
-            ...widget.detail.expenses.map((expense) => ListTile(
+            ...widget.detail.expenses.map((expense) {
+              final canManage = expense.createdByUid == widget.currentUid;
+              return ListTile(
                   contentPadding: EdgeInsets.zero,
                   dense: true,
                   title: Text(expense.title),
                   subtitle: Text(
                       '${names[expense.paidByUid]} 결제 · ${expense.participantUids.length}명'),
-                  trailing: Text(_yen(expense.amount),
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                )),
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(_yen(expense.amount),
+                        style: const TextStyle(fontWeight: FontWeight.w800)),
+                    if (canManage)
+                      PopupMenuButton<String>(
+                          enabled: !_saving,
+                          onSelected: (action) {
+                            if (action == 'edit') _startEditing(expense);
+                            if (action == 'delete') _delete(expense);
+                          },
+                          itemBuilder: (context) => const [
+                                PopupMenuItem(value: 'edit', child: Text('수정')),
+                                PopupMenuItem(
+                                    value: 'delete', child: Text('삭제')),
+                              ]),
+                  ]));
+            }),
             ElevatedButton(
                 onPressed: _showResult, child: const Text('정산 결과 보기')),
           ],

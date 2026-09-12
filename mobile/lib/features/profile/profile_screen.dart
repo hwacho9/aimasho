@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
 import '../../models/meetup.dart';
+import '../../presentation/meetup_presentation.dart';
 import '../../providers/meetup_providers.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
@@ -20,6 +21,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   bool _anonymous = true;
   String _name = '';
   List<Room> _rooms = [];
+  List<RelationshipStat> _relationships = [];
   final _roomName = TextEditingController();
   final _invite = TextEditingController();
   final _originQuery = TextEditingController();
@@ -45,8 +47,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           await ref.read(meetupRepositoryProvider).ensureAnonymousUser();
       _name = user.displayName ?? '';
       _anonymous = user.isAnonymous;
-      if (!_anonymous)
-        _rooms = await ref.read(meetupRepositoryProvider).myRooms();
+      if (!_anonymous) {
+        final repository = ref.read(meetupRepositoryProvider);
+        final results = await Future.wait([
+          repository.myRooms(),
+          repository.myRelationships(),
+        ]);
+        _rooms = results[0] as List<Room>;
+        _relationships = results[1] as List<RelationshipStat>;
+      } else {
+        _rooms = [];
+        _relationships = [];
+      }
     } catch (error) {
       if (mounted)
         ScaffoldMessenger.of(context)
@@ -63,6 +75,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           await ref.read(meetupRepositoryProvider).continueWithGoogle();
       await ref.read(meetupRepositoryProvider).saveProfile(
           user.displayName ?? (_name.isNotEmpty ? _name : 'aimasho user'));
+      ref.invalidate(dashboardProvider);
       await _load();
     } catch (error) {
       if (mounted)
@@ -79,6 +92,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       final room = await ref.read(meetupRepositoryProvider).createRoom(
           _roomName.text.trim(), _name.isNotEmpty ? _name : 'aimasho user');
+      ref.invalidate(dashboardProvider);
       if (mounted) context.push('/rooms/${room.id}');
     } catch (error) {
       if (mounted)
@@ -95,6 +109,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       final roomId = await ref.read(meetupRepositoryProvider).joinRoom(
           _invite.text.trim(), _name.isNotEmpty ? _name : 'aimasho user');
+      ref.invalidate(dashboardProvider);
       if (mounted) context.push('/rooms/$roomId');
     } catch (error) {
       if (mounted)
@@ -174,7 +189,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                   fontWeight: FontWeight.w800, fontSize: 18)),
                           const SizedBox(height: 8),
                           const Text(
-                              'Google로 연결하면 Room을 만들고 여러 기기에서 약속을 확인할 수 있어요.',
+                              'Google로 연결하면 그룹 초대에 참여하고, 멤버·약속·친구 기록을 여러 기기에서 계속 확인할 수 있어요.',
                               style: TextStyle(
                                   color: AimashoColors.muted,
                                   fontSize: 12,
@@ -185,6 +200,46 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                               child: Text(_busy ? '연결 중...' : 'Google로 계속하기'))
                         ]))
               else ...[
+                const SizedBox(height: 26),
+                const Text('TOGETHER',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: AimashoColors.coral,
+                        letterSpacing: 1.2,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 6),
+                Text('함께한 친구',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w800)),
+                if (_relationships.isEmpty)
+                  const Padding(
+                      padding: EdgeInsets.only(top: 7),
+                      child: Text('프로필이 있는 친구와 약속을 만들면 관계를 확인할 수 있어요.',
+                          style: TextStyle(
+                              color: AimashoColors.muted, fontSize: 12)))
+                else
+                  ..._relationships.map((relationship) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                          backgroundColor: const Color(0xFFFFE5D6),
+                          child: Text(displayInitial(relationship.displayName),
+                              style: const TextStyle(
+                                  color: AimashoColors.coral,
+                                  fontWeight: FontWeight.w800))),
+                      title: Text(relationship.displayName,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      subtitle:
+                          Text('함께한 약속 ${relationship.sharedMeetupCount}회'),
+                      trailing: Text(
+                          relationshipLabel(relationship.sharedMeetupCount),
+                          style: const TextStyle(
+                              color: AimashoColors.coral,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800)),
+                      onTap: () =>
+                          context.push('/friends/${relationship.otherUid}'))),
                 const SizedBox(height: 26),
                 const Text('DEFAULT ORIGIN',
                     style: TextStyle(
