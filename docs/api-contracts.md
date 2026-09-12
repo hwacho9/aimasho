@@ -10,7 +10,8 @@ All callable functions run in `asia-northeast1` and require Firebase Authenticat
   "title": "大学の友だちと夜ごはん",
   "description": "任意",
   "durationMinutes": 120,
-  "candidateSlots": ["2026-08-21T10:00:00.000Z"]
+  "candidateSlots": ["2026-08-21T10:00:00.000Z"],
+  "responseDeadline": "2026-08-19T14:59:00.000Z"
 }
 ```
 
@@ -26,7 +27,7 @@ Input `{ "meetupId": "...", "displayName": "유키" }`; creates or updates the c
 
 ## `upsertVote`
 
-Input `{ "meetupId": "...", "slotId": "...", "status": "YES" | "MAYBE" | "NO" }`.
+Input `{ "meetupId": "...", "slotId": "...", "status": "YES" | "MAYBE" | "NO" }`. When `responseDeadline` is set, schedule votes and candidate additions are rejected after the deadline.
 
 ## `calculateScheduleRecommendation`
 
@@ -46,6 +47,8 @@ Input `{ "meetupId": "...", "slotId": "..." }`; host-only. It records `SCHEDULE_
 
 `registerDeviceToken` accepts `{ "meetupId", "token" }` from the Flutter app after notification permission is granted. It stores the caller's token server-side and queues only that caller's route. `sendDepartureNotifications` is a server-only scheduled function; it sends a single FCM notification when the stored departure time is due.
 
+`setMeetupReminderPreference` accepts `{ "meetupId", "enabled", "locale", "token", "platform" }`. `token` is required only when enabling. It opts the caller into reminders 24 hours, 1 hour, and 10 minutes before the confirmed schedule. `registerPushToken` refreshes the signed-in user's stored token when FCM rotates it. `sendMeetupReminders` runs every minute and sends due reminders independently from route/departure calculation. A schedule change replaces pending reminder jobs; completion, cancellation, and deletion remove them.
+
 ## Phase 7: settlement
 
 `createExpense` accepts `{ "meetupId", "title", "amount", "paidByUid", "participantUids" }`; amount is integer JPY. `calculateSettlementResult` returns balances and the minimum transfer list. It does not initiate payments.
@@ -55,5 +58,32 @@ Input `{ "meetupId": "...", "slotId": "..." }`; host-only. It records `SCHEDULE_
 `saveProfile` and `saveDefaultOrigin` support registered accounts. `createRoom`, `joinRoom`, `getMyRooms`, `getRoomDetail`, and `getRoomInvitePreview` manage persistent Room membership. Room creation and joining reject anonymous accounts. Room invite URLs use `/r/{inviteCode}`.
 
 `getMeetupRelationships` accepts `{ "meetupId": "..." }` from a meetup participant and returns the caller's relationship summaries for other registered participants in that meetup. `getMyRelationships` has no input and returns the caller's summaries ordered by the most recent shared meetup. Each item is `{ "otherUid", "displayName", "sharedMeetupCount", "lastMeetupId" }`.
+
+`getFriendHistory` accepts `{ "otherUid": "..." }` and returns the shared meetup list, completed count, and chronological `stops` used by the two-person Journey player.
+
+`getMyTravelTimeline` has no input and is loaded separately from the home dashboard. It returns only places deliberately saved on completed meetups, in chronological order. It does not read or store continuous GPS history.
+
+```json
+{
+  "stops": [{
+    "id": "meetup-id:0",
+    "meetupId": "meetup-id",
+    "title": "저녁 약속",
+    "visitedAt": "2026-08-21T10:00:00.000Z",
+    "sequence": 0,
+    "place": {
+      "placeId": "places/example",
+      "name": "渋谷駅",
+      "latitude": 35.658034,
+      "longitude": 139.701636
+    }
+  }],
+  "summary": {
+    "completedMeetupCount": 1,
+    "uniquePlaceCount": 1,
+    "totalStops": 1
+  }
+}
+```
 
 Only pairs with saved registered profiles are counted. A pair has at most one count per meetup, including retries and re-joins. When an anonymous account later becomes registered through `saveProfile`, relationship history is backfilled from its prior meetup participations.

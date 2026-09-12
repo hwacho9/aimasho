@@ -28,6 +28,7 @@ Firebase Callable Functions (asia-northeast1)
 | Cloud Functions for Firebase v2 | 권한 검증 및 핵심 비즈니스 로직 | `asia-northeast1` 리전 배포 |
 | Google Places API (New) | 장소·역 텍스트 검색 | `USE_MOCK_MAPS=false`, 서버 키 설정 |
 | Google Routes API | 대중교통 경로와 소요 시간 계산 | 같은 서버 키에 Routes API 권한 부여 |
+| Google Maps Embed API | 웹의 선택한 장소·당일 플랜 지도 | 별도 브라우저용 Embed 키, 웹사이트 제한 |
 | Firebase Cloud Messaging (FCM) | 출발 시간 푸시 알림 | Android/iOS 앱 등록 및 FCM 설정 |
 | Cloud Scheduler | 매분 출발 알림 작업 확인 | Functions 배포 전 활성화 |
 
@@ -51,6 +52,23 @@ NEXT_PUBLIC_USE_FIREBASE_EMULATOR=false
 `NEXT_PUBLIC_*` 값은 브라우저에 노출되는 Firebase 앱 식별 정보입니다. Firebase 보안의 핵심은 API 키 은닉이 아니라 Authentication, Firestore Rules, Callable Functions 권한 검증입니다.
 
 `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID`에는 Firebase 웹 앱 설정의 `measurementId`(`G-`로 시작)를 넣습니다. 값이 없으면 웹 Analytics는 자동으로 비활성화되므로 로컬 개발과 에뮬레이터 테스트 데이터는 운영 분석 속성으로 전송되지 않습니다.
+
+### 웹 장소 지도 설정 (Maps Embed API)
+
+장소 검색용 서버 키와 지도 표시용 브라우저 키는 분리합니다. 기존 `GOOGLE_MAPS_SERVER_API_KEY` 또는 Firebase 키를 아래 값에 넣지 마세요.
+
+1. Google Cloud에서 **Maps Embed API**를 활성화하고 별도 브라우저용 API 키를 만듭니다.
+2. 키의 API 제한은 **Maps Embed API만**, 애플리케이션 제한은 **웹사이트**로 지정합니다. 실제 사용하는 주소만 허용합니다. 예: `https://aimasho.web.app/*`, 로컬 개발용 `http://localhost:3000/*`, `http://127.0.0.1:4317/*`. `aimasho.app` 등 다른 운영 도메인은 실제 사용 시 추가합니다.
+3. `web/.env.local`에 `NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY=브라우저용_키`를 설정합니다. 로컬 Next/Vite 서버를 다시 시작합니다. 키를 채팅이나 Git에 붙이지 마세요.
+4. 운영에서는 **Next 빌드 환경**에도 같은 변수를 설정한 뒤 웹을 다시 빌드·배포해야 합니다. Cloud Run 런타임 변수만 바꾸거나 Hosting만 배포하면 기존 JS 번들은 바뀌지 않습니다.
+
+선택한 장소와 확정된 집합 장소는 lazy iframe으로 표시합니다. 저장된 당일 플랜의 지도는 `地図を見る / 지도 보기`를 눌러야 iframe을 만들고, 접으면 제거합니다. Maps JavaScript SDK나 별도 서버 호출은 추가하지 않았습니다. 장소 ID를 우선 사용하고, 없는 기존 데이터는 좌표로 표시합니다. 지도에는 사이트 origin만 referrer로 전달하여 모임 경로나 초대 링크를 전달하지 않습니다.
+
+키가 없으면 Google Embed 요청을 보내지 않고, 좌표가 있는 장소는 카드 안에 OpenStreetMap 미리보기를 보여줍니다. 좌표가 없는 기존 장소에는 이름·주소와 **Google Maps에서 열기** 링크를 표시합니다. 키 제한/API 설정 오류는 Google iframe 내부에 표시될 수 있으므로 외부 지도 링크는 항상 유지합니다. 출발·도착 시간 계산은 다시 활성화하지 않습니다.
+
+키 분리, 실제 Field Mask, 월별 무료 한도·예상 비용·예산 알림은 [Google 지도 표시와 Places 비용 운영 가이드](./google-maps-embed-and-pricing.md)를 참고합니다.
+
+공식 안내: [Maps Embed 설정](https://developers.google.com/maps/documentation/embed/get-api-key), [iframe 및 장소 ID](https://developers.google.com/maps/documentation/embed/embedding-map), [Next 공개 환경 변수의 빌드 시 적용](https://nextjs.org/docs/app/guides/environment-variables).
 
 ### Google 로그인 설정
 
@@ -148,7 +166,7 @@ Emulator 포트는 Authentication `9099`, Functions `5001`, Firestore `8080`, Em
 | `createMeetup` | 로그인 사용자 | 약속과 후보 시간을 생성합니다. `roomId`를 전달하면 Room 멤버를 참가자로 추가합니다. |
 | `getMeetupInvitePreview` | 로그인 사용자 | 초대 링크에서 가입 전에 보여줄 제목·호스트 정보를 가져옵니다. |
 | `joinMeetup` | 로그인 사용자 | 표시 이름으로 약속에 참가합니다. |
-| `upsertVote` | 참가자 | 후보 시간에 `YES` / `MAYBE` / `NO` 투표를 저장합니다. |
+| `upsertVote` | 참가자 | 후보 시간에 `YES` / `MAYBE` / `NO` 투표를 저장합니다. 응답 마감 이후에는 새 응답을 거절합니다. |
 | `calculateScheduleRecommendation` | 참가자 | `NO` 최소 → `YES` 최대 → 점수 순으로 후보 시간을 추천합니다. |
 | `confirmSchedule` | 호스트 | 후보 하나를 확정하고 위치 수집 단계로 전환합니다. |
 
@@ -161,9 +179,12 @@ Emulator 포트는 Authentication `9099`, Functions `5001`, Firestore `8080`, Em
   "description": "선택 사항",
   "durationMinutes": 120,
   "candidateSlots": ["2026-08-21T10:00:00.000Z"],
+  "responseDeadline": "2026-08-19T14:59:00.000Z",
   "roomId": "선택 사항"
 }
 ```
+
+`responseDeadline`은 선택 사항이며 미래의 ISO 날짜·시간이어야 합니다. 설정하면 Web과 Flutter 모두 남은 마감을 표시하고, 마감 후에는 날짜 투표와 후보 추가를 비활성화합니다. 서버도 같은 조건을 검증하므로 오래 열린 화면이나 직접 API 호출로 마감을 우회할 수 없습니다.
 
 ### 출발지·장소·경로
 
@@ -213,6 +234,8 @@ Emulator 포트는 Authentication `9099`, Functions `5001`, Firestore `8080`, Em
 | `saveProfile` | 로그인 사용자 | 표시 이름과 계정 상태를 저장합니다. |
 | `getMeetupRelationships` | 약속 참가자인 등록 계정 | 현재 약속에서 함께한 등록 사용자별 약속 횟수와 관계 단계를 표시할 수 있는 집계를 가져옵니다. |
 | `getMyRelationships` | 등록 계정 | 내 프로필에 표시할 전체 관계 목록을 최근 약속 순으로 가져옵니다. |
+| `getFriendHistory` | 등록 계정 | 특정 친구와 함께한 횟수, 약속 목록, 둘만의 Journey 장소를 가져옵니다. |
+| `getMyTravelTimeline` | 등록 계정 | 완료된 약속 장소를 날짜순으로 가져와 Journey 재생 화면에 사용합니다. |
 | `saveDefaultOrigin` | 등록 계정 | 기본 출발지를 저장합니다. |
 | `createRoom` | 등록 계정 | Room과 초대 코드를 만듭니다. |
 | `getRoomInvitePreview` | 로그인 사용자 | `/r/{inviteCode}`에서 Room 이름·생성자 정보를 보여줍니다. |
@@ -250,6 +273,14 @@ Emulator 포트는 Authentication `9099`, Functions `5001`, Firestore `8080`, Em
 
 관계 문서는 `users/{uid}/relationships/{otherUid}`에 서버만 기록합니다. 클라이언트는 다른 사람의 전체 관계 목록을 Firestore에서 직접 읽을 수 없고, 자신의 데이터만 위 Callable API를 통해 받습니다.
 
+#### Journey 지도 재생 데이터
+
+`getMyTravelTimeline`은 홈 대시보드와 별도로 호출합니다. 완료된 약속의 `planItems` 중 완료 처리된 장소를 우선 사용하고, 없으면 확정 모임 장소를 사용합니다. 화면은 반환된 장소를 날짜순으로 연결해 경로선과 현재 마커를 애니메이션으로 재생합니다.
+
+이 데이터는 **실제 GPS 위치 기록이 아닙니다.** 사용자가 aimasho 약속에 직접 저장한 장소만 포함하며, 백그라운드 위치 추적·상시 위치 수집·이동 구간 저장을 하지 않습니다. 같은 이유로 경로선은 실제 이동 도로나 교통수단 경로가 아니라 저장된 약속 장소 사이를 시각적으로 연결한 선입니다.
+
+응답의 `summary`에는 완료 약속 수, 고유 방문 장소 수, 전체 여정 포인트 수가 들어갑니다. `getFriendHistory`도 같은 `stops` 구조를 반환하므로 친구 상세 화면에서 둘만의 Journey를 재생할 수 있습니다.
+
 ## 6. Google Maps API 동작
 
 `USE_MOCK_MAPS=true`일 때는 도쿄권 역 9개와 거리 기반의 결정적 모의 경로를 사용합니다. 개발·데모·자동 테스트에 적합합니다.
@@ -265,7 +296,27 @@ Routes API는 `TRANSIT` 모드와 약속 10분 전 도착 목표 시간을 사�
 
 Google Maps의 범용 Directions URL은 출발지·도착지·이동 수단은 전달할 수 있지만, 특정 대중교통 출발 시각을 전달하는 공식 파라미터는 제공하지 않습니다. 따라서 앱이 계산한 출발 시각이 기준 정보이며, 외부 Google Maps 화면은 현재 시각 기준의 경로를 표시할 수 있습니다.
 
-## 7. 출발 알림(FCM) 동작
+## 7. 일정 알림 및 출발 알림(FCM) 동작
+
+확정된 일정 알림은 현재 사용할 수 있으며 출발 시간 계산과 독립적으로 동작합니다.
+
+1. 참가자가 약속 화면에서 `일정 알림`을 켭니다.
+2. Flutter 앱이 알림 권한과 FCM 토큰을 확인한 뒤 `setMeetupReminderPreference`를 호출합니다.
+3. 서버는 확정 일정 24시간 전, 1시간 전, 10분 전의 `meetupReminders` 작업을 예약합니다.
+4. `sendMeetupReminders`가 Cloud Scheduler로 매분 실행되어 한국어 또는 일본어 알림을 발송합니다.
+5. 집합 시간이 바뀌면 아직 발송하지 않은 작업을 새 시간으로 교체합니다. 약속 완료·취소·삭제 시 예약 작업을 제거합니다.
+
+```json
+{
+  "meetupId": "약속 ID",
+  "enabled": true,
+  "locale": "ko",
+  "token": "FCM 기기 토큰",
+  "platform": "ios"
+}
+```
+
+출발 시간 알림은 대중교통 경로 기능과 함께 현재 비활성화되어 있습니다. 아래는 다시 활성화할 때의 처리 흐름입니다.
 
 1. Flutter 앱이 알림 권한을 요청합니다.
 2. 허용 시 `registerDeviceToken`이 본인 FCM 토큰을 Functions에 저장합니다.

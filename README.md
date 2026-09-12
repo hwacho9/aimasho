@@ -14,9 +14,13 @@ Phase 0–3 MVP: Firebase Anonymous Authentication, meetup creation, invite link
 
 외부 서비스 설정, Callable API, 지도·알림 연동 방법은 [한국어 API 연동 가이드](./docs/API-연동-가이드.md)를 참고하세요.
 
+운영 주소는 **https://aimasho.web.app/** 입니다. Firebase Hosting → Cloud Run 구조의 전체 배포 방법은 [read.md](./read.md), Web/iOS 자동 테스트는 [E2E 보고서](./docs/e2e-social-flow.md)를 참고하세요. `npm run deploy`는 서버 함수·Firestore·웹 서버·Hosting을 순서대로 갱신합니다.
+
+Google Maps Embed 키 분리와 Places/Routes 비용은 [Google 지도 표시와 Places 비용 운영 가이드](./docs/google-maps-embed-and-pricing.md)에 정리했습니다.
+
 ## Configure Firebase
 
-1. Create a Firebase project in the `asia-northeast1` region, enable **Anonymous Authentication** and **Cloud Firestore**, then replace `REPLACE_WITH_FIREBASE_PROJECT_ID` in `.firebaserc`.
+1. The current production project is `aimasho` in `.firebaserc`. Enable **Anonymous Authentication**, **Google Authentication**, and **Cloud Firestore** for your own project if creating a separate environment.
 2. Copy `web/.env.example` to `web/.env.local` and fill in the Firebase Web app configuration.
 3. Copy `mobile/firebase.env.example.json` to a local file such as `mobile/firebase.env.json`, fill it in, and launch Flutter with `flutter run --dart-define-from-file=firebase.env.json` from `mobile/`.
 4. Deploy backend and rules with `npm run deploy`. The Firebase CLI must be authenticated to the selected project.
