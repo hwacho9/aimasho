@@ -10,3 +10,9 @@ functions/.env
 firebase.env.json
 .firebase/
 firepit-log.txt
+firebase-debug.log
+firestore-debug.log
+
+GoogleService-Info.plist
+.DS_Store
+/test-results/

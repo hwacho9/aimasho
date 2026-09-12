@@ -6,7 +6,12 @@
     "test": "npm --prefix functions test && npm --prefix web test",
     "build": "npm --prefix functions run build && npm --prefix web run build",
     "emulators": "npm --prefix functions run build && firebase emulators:start",
-    "deploy": "npm --prefix functions run build && firebase deploy"
+    "emulators:e2e": "npm --prefix functions run build && firebase emulators:start --config firebase.e2e.json --project demo-aimasho-e2e --only auth,firestore,functions",
+    "test:e2e:api": "node functions/tests/social-http-e2e.mjs",
+    "deploy:backend": "npm --prefix functions run build && firebase deploy --project aimasho --only functions,firestore --non-interactive",
+    "deploy:web": "node scripts/deploy-web.mjs",
+    "deploy:hosting": "firebase deploy --project aimasho --only hosting --non-interactive",
+    "deploy": "npm run check && npm run deploy:backend && npm run deploy:web && npm run deploy:hosting"
   },
   "devDependencies": {
     "firebase-tools": "^15.26.0"

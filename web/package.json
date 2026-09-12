@@ -9,16 +9,24 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "preview:social": "vite --config tests/preview/vite.config.mts",
+    "dev:e2e": "node scripts/dev-e2e.mjs",
+    "test:e2e": "playwright test",
     "check": "npm run lint && npm run typecheck"
   },
   "dependencies": {
-    "firebase": "^12.11.0",
     "firebase": "^12.17.1",
-    "next": "15.2.9",
+    "next": "15.5.25",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.28"
+    }
+  },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

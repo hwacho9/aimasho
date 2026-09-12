@@ -24,6 +24,10 @@ function appHostingFirebaseConfig(): FirebaseWebAppConfig {
 const appHostingConfig = appHostingFirebaseConfig();
 
 const nextConfig: NextConfig = {
+  // The Firebase Hosting rewrite serves this Linux-built Cloud Run container.
+  output: process.env.AIMASHO_CLOUD_RUN === "true" ? "standalone" : undefined,
+  // Separate the local E2E server from an already-running developer checkout.
+  distDir: process.env.AIMASHO_E2E === "true" ? ".next-e2e" : ".next",
   // Keep stale ISR shells for at most one hour. The default one-year window
   // can otherwise leave an old JavaScript entrypoint visible after a rollout.
   expireTime: 60 * 60,
