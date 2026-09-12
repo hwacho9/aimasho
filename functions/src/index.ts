@@ -4,248 +4,70 @@ import { getMessaging } from "firebase-admin/messaging";
 import { HttpsError, onCall, onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { setGlobalOptions } from "firebase-functions/v2";
+import {
+  dashboardMeetupPayload,
+  historyDate,
+  historyMeetupPayload,
+  mapPlaceVisits,
+  travelTimelineStops,
+} from "./dashboard/history.js";
 import { rankSchedule } from "./scheduling/ranking.js";
 import { getMapsProvider } from "./locations/provider.js";
 import { geographicCenter, rankMeetingPoints } from "./locations/ranking.js";
-import type { Location, MeetingPointMode } from "./locations/models.js";
+import type { Location } from "./locations/models.js";
+import {
+  MEETUP_REMINDER_MINUTES,
+  meetupReminderCopy,
+  meetupReminderTimes,
+} from "./notifications/reminders.js";
 import { calculateSettlement, type ExpenseInput } from "./settlement/settlement.js";
 import { createInviteCode } from "./rooms/invite-code.js";
+import {
+  recordRelationshipsForMeetup,
+  recordRelationshipsForRegisteredUser,
+} from "./relationships/service.js";
+import {
+  contentVotingEnabled,
+  defaultContentOptions,
+  requireContentCategory,
+  requireContentVoteConfig,
+  requireExpensePayload,
+  requireLocation,
+  requireMeetingPointMode,
+  requirePlanItemPayload,
+  requirePlanItemStatus,
+  requireScheduleCondition,
+  responseDeadlineHasPassed,
+  type ContentCategory,
+  type CreateMeetupInput,
+  type ExpensePayload,
+  type MeetupStatus,
+  type PlanItemStatus,
+} from "./shared/domain-validation.js";
 import type { CandidateSlot, Vote, VoteStatus } from "./shared/models.js";
+import {
+  optionalIsoDateTime,
+  parseIsoDate,
+  requireBoolean,
+  requireIsoDateTime,
+  requireString,
+  requireVoteStatus,
+} from "./shared/validation.js";
 
 if (getApps().length === 0) initializeApp();
 
 setGlobalOptions({ region: "asia-northeast1", maxInstances: 10 });
 const db = getFirestore();
 
+export { getMyMeetups, getMySocialOverview, getMeetupMemories, saveMeetupMemory, deleteMeetupMemory } from "./social/service.js";
+
 // Google Maps Platform does not provide Japanese public-transit timetables to
 // this app. Keep the feature off until a timetable provider is connected.
 const DEPARTURE_TIME_FEATURE_ENABLED = false;
 
-type MeetupStatus =
-  | "SCHEDULING"
-  | "SCHEDULE_CONFIRMED"
-  | "LOCATION_COLLECTING"
-  | "LOCATION_SELECTING"
-  | "LOCATION_CONFIRMED"
-  | "READY"
-  | "COMPLETED"
-  | "CANCELLED";
-
-interface CreateMeetupInput {
-  displayName: string;
-  title: string;
-  description?: string;
-  durationMinutes: number;
-  candidateSlots: string[];
-  roomId?: string | null;
-  collectOrigins?: boolean;
-  allowParticipantSlotAdd?: boolean;
-  responseDeadline?: string | null;
-  scheduleCondition?: ScheduleConditionInput;
-  contentVoteConfig?: ContentVoteConfigInput;
-  allowPlanEditing?: boolean;
-}
-
-interface ScheduleConditionInput {
-  mode: "MANUAL" | "RANGE" | "MONTH" | "NEXT_MONTH";
-  rangeStart?: string;
-  rangeEnd?: string;
-  weekdayNumbers?: number[];
-}
-
-type ContentCategory = "FOOD" | "ACTIVITY";
-type PlanItemType = "meet" | "food" | "activity" | "cafe" | "move" | "other" | "end";
-type PlanItemStatus = "planned" | "completed" | "skipped";
-type PlanItemSource = "manual" | "vote" | "recommendation";
-
-interface ContentVoteConfigInput {
-  food?: boolean;
-  activity?: boolean;
-  allowMultiple?: boolean;
-  allowParticipantOptions?: boolean;
-}
-
-interface ContentVoteConfig {
-  food: boolean;
-  activity: boolean;
-  allowMultiple: boolean;
-  allowParticipantOptions: boolean;
-}
-
-interface PlanItemPayload {
-  type: PlanItemType;
-  title: string;
-  place?: Location;
-  scheduledAt?: Date;
-  note?: string;
-  source: PlanItemSource;
-}
-
-type LocationInput = Location;
-
-interface ExpensePayload {
-  title: string;
-  amount: number;
-  paidByUid: string;
-  participantUids: string[];
-}
-
 function requireUid(uid: string | undefined): string {
   if (!uid) throw new HttpsError("unauthenticated", "Sign in is required.");
   return uid;
-}
-
-function requireString(value: unknown, field: string, maxLength = 140): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.trim().length > maxLength) {
-    throw new HttpsError("invalid-argument", `${field} is invalid.`);
-  }
-  return value.trim();
-}
-
-function requireVoteStatus(value: unknown): VoteStatus {
-  if (value === "YES" || value === "MAYBE" || value === "NO") return value;
-  throw new HttpsError("invalid-argument", "status must be YES, MAYBE, or NO.");
-}
-
-function parseIsoDate(value: unknown): string {
-  const date = typeof value === "string" ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) {
-    throw new HttpsError("invalid-argument", "candidateSlots must contain valid ISO datetimes.");
-  }
-  return date.toISOString();
-}
-
-function requireIsoDateTime(value: unknown, field: string): Date {
-  const raw = requireString(value, field);
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) {
-    throw new HttpsError("invalid-argument", `${field} must be a valid ISO datetime.`);
-  }
-  return date;
-}
-
-function optionalIsoDateTime(value: unknown, field: string): Date | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  return requireIsoDateTime(value, field);
-}
-
-function requireBoolean(value: unknown, field: string, fallback: boolean): boolean {
-  if (value === undefined || value === null) return fallback;
-  if (typeof value !== "boolean") throw new HttpsError("invalid-argument", `${field} must be a boolean.`);
-  return value;
-}
-
-function requireScheduleCondition(value: unknown): ScheduleConditionInput | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", "scheduleCondition is invalid.");
-  const input = value as Partial<ScheduleConditionInput>;
-  if (input.mode !== "MANUAL" && input.mode !== "RANGE" && input.mode !== "MONTH" && input.mode !== "NEXT_MONTH") {
-    throw new HttpsError("invalid-argument", "scheduleCondition.mode is invalid.");
-  }
-  const rangeStart = input.rangeStart === undefined ? undefined : parseIsoDate(input.rangeStart);
-  const rangeEnd = input.rangeEnd === undefined ? undefined : parseIsoDate(input.rangeEnd);
-  if (rangeStart && rangeEnd && new Date(rangeStart) > new Date(rangeEnd)) {
-    throw new HttpsError("invalid-argument", "scheduleCondition range is invalid.");
-  }
-  if (input.weekdayNumbers !== undefined && (!Array.isArray(input.weekdayNumbers) || input.weekdayNumbers.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) {
-    throw new HttpsError("invalid-argument", "scheduleCondition.weekdayNumbers is invalid.");
-  }
-  return {
-    mode: input.mode,
-    ...(rangeStart ? { rangeStart } : {}),
-    ...(rangeEnd ? { rangeEnd } : {}),
-    ...(input.weekdayNumbers ? { weekdayNumbers: [...new Set(input.weekdayNumbers)].sort() } : {}),
-  };
-}
-
-function responseDeadlineHasPassed(value: unknown): boolean {
-  return value instanceof Timestamp && value.toMillis() <= Date.now();
-}
-
-function requireContentVoteConfig(value: unknown): ContentVoteConfig {
-  const input = value && typeof value === "object" ? value as ContentVoteConfigInput : {};
-  return {
-    food: requireBoolean(input.food, "contentVoteConfig.food", false),
-    activity: requireBoolean(input.activity, "contentVoteConfig.activity", false),
-    allowMultiple: requireBoolean(input.allowMultiple, "contentVoteConfig.allowMultiple", false),
-    allowParticipantOptions: requireBoolean(input.allowParticipantOptions, "contentVoteConfig.allowParticipantOptions", true),
-  };
-}
-
-function requireContentCategory(value: unknown): ContentCategory {
-  if (value === "FOOD" || value === "ACTIVITY") return value;
-  throw new HttpsError("invalid-argument", "category must be FOOD or ACTIVITY.");
-}
-
-function requirePlanItemType(value: unknown): PlanItemType {
-  if (["meet", "food", "activity", "cafe", "move", "other", "end"].includes(value as string)) return value as PlanItemType;
-  throw new HttpsError("invalid-argument", "Plan item type is invalid.");
-}
-
-function requirePlanItemStatus(value: unknown): PlanItemStatus {
-  if (value === "planned" || value === "completed" || value === "skipped") return value;
-  throw new HttpsError("invalid-argument", "Plan item status is invalid.");
-}
-
-function requirePlanItemSource(value: unknown): PlanItemSource {
-  if (value === undefined || value === null) return "manual";
-  if (value === "manual" || value === "vote" || value === "recommendation") return value;
-  throw new HttpsError("invalid-argument", "Plan item source is invalid.");
-}
-
-function requirePlanItemPayload(value: unknown): PlanItemPayload {
-  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", "Plan item is invalid.");
-  const input = value as Record<string, unknown>;
-  const scheduledAt = optionalIsoDateTime(input.scheduledAt, "scheduledAt");
-  const note = input.note === undefined || input.note === null || input.note === "" ? undefined : requireString(input.note, "note", 500);
-  return {
-    type: requirePlanItemType(input.type),
-    title: requireString(input.title, "title", 120),
-    ...(input.place ? { place: requireLocation(input.place, "place") } : {}),
-    ...(scheduledAt ? { scheduledAt } : {}),
-    ...(note ? { note } : {}),
-    source: requirePlanItemSource(input.source),
-  };
-}
-
-function contentVotingEnabled(config: ContentVoteConfig, category: ContentCategory): boolean {
-  return category === "FOOD" ? config.food : config.activity;
-}
-
-const defaultContentOptions: Record<ContentCategory, string[]> = {
-  FOOD: ["焼肉", "居酒屋", "イタリアン", "カフェ", "ラーメン", "韓国料理", "寿司"],
-  ACTIVITY: ["映画", "カラオケ", "ボウリング", "水族館", "ショッピング", "アウトドア", "ドライブ"],
-};
-
-function requireLocation(value: unknown, field = "location"): LocationInput {
-  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", `${field} is invalid.`);
-  const input = value as Partial<LocationInput>;
-  const name = requireString(input.name, `${field}.name`, 160);
-  const placeId = requireString(input.placeId, `${field}.placeId`, 256);
-  if (typeof input.latitude !== "number" || typeof input.longitude !== "number" || !Number.isFinite(input.latitude) || !Number.isFinite(input.longitude) || Math.abs(input.latitude) > 90 || Math.abs(input.longitude) > 180) {
-    throw new HttpsError("invalid-argument", `${field} coordinates are invalid.`);
-  }
-  return { placeId, name, ...(typeof input.address === "string" ? { address: input.address.slice(0, 300) } : {}), latitude: input.latitude, longitude: input.longitude };
-}
-
-function requireMeetingPointMode(value: unknown): MeetingPointMode {
-  if (value === "FAIR" || value === "FAST") return value;
-  throw new HttpsError("invalid-argument", "mode must be FAIR or FAST.");
-}
-
-function requireExpensePayload(value: unknown): ExpensePayload {
-  if (!value || typeof value !== "object") throw new HttpsError("invalid-argument", "Expense input is invalid.");
-  const input = value as Partial<ExpensePayload>;
-  const title = requireString(input.title, "title", 120);
-  const amount = input.amount;
-  if (!Number.isInteger(amount) || amount === undefined || amount <= 0 || amount > 10_000_000) {
-    throw new HttpsError("invalid-argument", "amount must be a positive integer yen amount.");
-  }
-  const paidByUid = requireString(input.paidByUid, "paidByUid", 128);
-  if (!Array.isArray(input.participantUids) || input.participantUids.length === 0 || input.participantUids.some((id) => typeof id !== "string" || id.length === 0)) {
-    throw new HttpsError("invalid-argument", "participantUids is invalid.");
-  }
-  return { title, amount, paidByUid, participantUids: [...new Set(input.participantUids)] };
 }
 
 async function validateExpenseParticipants(meetupId: string, expense: ExpensePayload): Promise<void> {
@@ -295,6 +117,99 @@ async function queueDepartureNotification(
   }, { merge: true });
 }
 
+function meetupReminderJobId(meetupId: string, uid: string, minutesBefore: number): string {
+  return `${meetupId}_${uid}_${minutesBefore}`;
+}
+
+async function savePushToken(uid: string, token: string, platform: unknown): Promise<void> {
+  await db.doc(`users/${uid}/devices/default`).set({
+    token,
+    platform: platform === "android" ? "android" : "ios",
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function deleteMeetupReminderJobs(meetupId: string): Promise<number> {
+  const jobs = await db.collection("meetupReminders").where("meetupId", "==", meetupId).get();
+  if (jobs.empty) return 0;
+  const writer = db.bulkWriter();
+  jobs.docs.forEach((job) => writer.delete(job.ref));
+  await writer.close();
+  return jobs.size;
+}
+
+async function replaceUserMeetupReminderJobs(
+  meetupId: string,
+  uid: string,
+  meetupTitle: string,
+  meetupAt: Date,
+  locale: string,
+  enabled: boolean,
+): Promise<number> {
+  const batch = db.batch();
+  for (const minutesBefore of MEETUP_REMINDER_MINUTES) {
+    batch.delete(db.doc(`meetupReminders/${meetupReminderJobId(meetupId, uid, minutesBefore)}`));
+  }
+  let count = 0;
+  if (enabled) {
+    for (const reminder of meetupReminderTimes(meetupAt)) {
+      count += 1;
+      batch.set(db.doc(`meetupReminders/${meetupReminderJobId(meetupId, uid, reminder.minutesBefore)}`), {
+        meetupId,
+        uid,
+        meetupTitle,
+        meetupAt: Timestamp.fromDate(meetupAt),
+        minutesBefore: reminder.minutesBefore,
+        locale,
+        sendAt: Timestamp.fromDate(reminder.sendAt),
+        status: "PENDING",
+        attempts: 0,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+  }
+  await batch.commit();
+  return count;
+}
+
+async function replaceMeetupReminderJobs(
+  meetupId: string,
+  meetupTitle: string,
+  meetupAt: Date,
+): Promise<void> {
+  const preferences = await db.collection("meetupReminderPreferences")
+    .where("meetupId", "==", meetupId)
+    .get();
+  await deleteMeetupReminderJobs(meetupId);
+  await Promise.all(preferences.docs.map(async (preference) => {
+    const data = preference.data();
+    if (data.enabled !== true || typeof data.uid !== "string") return;
+    await replaceUserMeetupReminderJobs(
+      meetupId,
+      data.uid,
+      meetupTitle,
+      meetupAt,
+      data.locale === "ko" ? "ko" : "ja",
+      true,
+    );
+  }));
+}
+
+async function safelyReplaceMeetupReminderJobs(
+  meetupId: string,
+  meetupTitle: string,
+  meetupAt: Date,
+): Promise<void> {
+  try {
+    await replaceMeetupReminderJobs(meetupId, meetupTitle, meetupAt);
+  } catch (caught) {
+    console.error("Could not reschedule meetup reminders", {
+      meetupId,
+      message: caught instanceof Error ? caught.message : "Unknown error",
+    });
+  }
+}
+
 async function privateOrigin(meetupId: string, uid: string): Promise<Location | null> {
   const snapshot = await db.doc(`meetups/${meetupId}/privateOrigins/${uid}`).get();
   return snapshot.exists ? snapshot.data()?.origin as Location : null;
@@ -317,116 +232,6 @@ async function requireHost(meetupId: string, uid: string) {
   if (participant.data()?.isHost !== true) {
     throw new HttpsError("permission-denied", "Only the host can do this.");
   }
-}
-
-interface RegisteredParticipant {
-  uid: string;
-  displayName: string;
-}
-
-function relationshipPairId(firstUid: string, secondUid: string): string {
-  return Buffer.from([firstUid, secondUid].sort().join("\u0000")).toString("base64url");
-}
-
-async function registeredParticipants(meetupId: string): Promise<RegisteredParticipant[]> {
-  const participants = await db.collection(`meetups/${meetupId}/participants`).get();
-  if (participants.empty) return [];
-  const profiles = await db.getAll(...participants.docs.map((participant) => db.doc(`users/${participant.id}`)));
-  const profilesByUid = new Map(profiles.filter((profile) => profile.data()?.accountType === "REGISTERED").map((profile) => [profile.id, profile.data()]));
-  return participants.docs.flatMap((participant) => {
-    const profile = profilesByUid.get(participant.id);
-    return profile ? [{ uid: participant.id, displayName: profile.displayName ?? participant.data().displayName ?? "aimasho user" }] : [];
-  });
-}
-
-async function recordRelationshipPair(meetupId: string, first: RegisteredParticipant, second: RegisteredParticipant): Promise<void> {
-  if (first.uid === second.uid) return;
-  const pairId = relationshipPairId(first.uid, second.uid);
-  const pair = db.doc(`meetups/${meetupId}/relationshipPairs/${pairId}`);
-  const firstRelationship = db.doc(`users/${first.uid}/relationships/${second.uid}`);
-  const secondRelationship = db.doc(`users/${second.uid}/relationships/${first.uid}`);
-  await db.runTransaction(async (transaction) => {
-    if ((await transaction.get(pair)).exists) return;
-    transaction.set(pair, { participantUids: [first.uid, second.uid].sort(), createdAt: FieldValue.serverTimestamp() });
-    transaction.set(firstRelationship, { otherUid: second.uid, displayName: second.displayName, sharedMeetupCount: FieldValue.increment(1), lastMeetupId: meetupId, lastMeetupAt: FieldValue.serverTimestamp() }, { merge: true });
-    transaction.set(secondRelationship, { otherUid: first.uid, displayName: first.displayName, sharedMeetupCount: FieldValue.increment(1), lastMeetupId: meetupId, lastMeetupAt: FieldValue.serverTimestamp() }, { merge: true });
-  });
-}
-
-/** Records each registered pair once per meetup. Pair marker documents make this safe to retry. */
-async function recordRelationshipsForMeetup(meetupId: string, onlyForUid?: string): Promise<void> {
-  const participants = await registeredParticipants(meetupId);
-  const pairs = onlyForUid
-    ? participants.filter((participant) => participant.uid === onlyForUid).flatMap((participant) => participants.filter((other) => other.uid !== participant.uid).map((other) => [participant, other] as const))
-    : participants.flatMap((participant, index) => participants.slice(index + 1).map((other) => [participant, other] as const));
-  await Promise.all(pairs.map(([first, second]) => recordRelationshipPair(meetupId, first, second)));
-}
-
-async function recordRelationshipsForRegisteredUser(uid: string): Promise<void> {
-  const participations = await db.collectionGroup("participants").where("uid", "==", uid).get();
-  const meetupIds = new Set(participations.docs.map((participation) => participation.ref.parent.parent?.id).filter((meetupId): meetupId is string => Boolean(meetupId)));
-  await Promise.all([...meetupIds].map((meetupId) => recordRelationshipsForMeetup(meetupId, uid)));
-}
-
-interface HistoryMeetupPayload {
-  id: string;
-  title: string;
-  status: MeetupStatus;
-  confirmedDateTime: string | null;
-  completedAt: string | null;
-  meetingPlace: Location | null;
-  planPlaces: Location[];
-  candidateDateTimes: string[];
-  roomId: string | null;
-  isOwner?: boolean;
-}
-
-function timestampIso(value: unknown): string | null {
-  return value instanceof Timestamp ? value.toDate().toISOString() : null;
-}
-
-async function historyMeetupPayload(snapshot: DocumentSnapshot): Promise<HistoryMeetupPayload> {
-  const data = snapshot.data();
-  const confirmedDateTime = timestampIso(data?.confirmedDateTime);
-  const completedAt = timestampIso(data?.completedAt);
-  const status = data?.status as MeetupStatus;
-  const [plans, candidateSlots] = await Promise.all([
-    status === "COMPLETED" ? snapshot.ref.collection("planItems").get() : Promise.resolve(null),
-    !confirmedDateTime && !completedAt
-      ? snapshot.ref.collection("candidateSlots").orderBy("startDateTime").limit(1).get()
-      : Promise.resolve(null),
-  ]);
-  const planPlaces = (plans?.docs ?? [])
-    .filter((item) => item.data()?.status === "completed" && item.data()?.place)
-    .map((item) => item.data().place as Location);
-  return {
-    id: snapshot.id,
-    title: data?.title ?? "aimasho meetup",
-    status,
-    confirmedDateTime,
-    completedAt,
-    meetingPlace: data?.meetingPlace ? data.meetingPlace as Location : null,
-    planPlaces,
-    candidateDateTimes: (candidateSlots?.docs ?? []).flatMap((slot) => {
-      const value = timestampIso(slot.data()?.startDateTime);
-      return value ? [value] : [];
-    }),
-    roomId: typeof data?.roomId === "string" ? data.roomId : null,
-  };
-}
-
-function mapPlaceVisits(meetups: HistoryMeetupPayload[]) {
-  const places = new Map<string, { place: Location; count: number; meetupIds: string[] }>();
-  for (const meetup of meetups.filter((item) => item.status === "COMPLETED")) {
-    const usedPlaces = meetup.planPlaces.length > 0 ? meetup.planPlaces : meetup.meetingPlace ? [meetup.meetingPlace] : [];
-    for (const place of usedPlaces) {
-      const current = places.get(place.placeId) ?? { place, count: 0, meetupIds: [] };
-      current.count += 1;
-      if (!current.meetupIds.includes(meetup.id)) current.meetupIds.push(meetup.id);
-      places.set(place.placeId, current);
-    }
-  }
-  return [...places.values()].sort((a, b) => b.count - a.count || a.place.name.localeCompare(b.place.name));
 }
 
 export const createMeetup = onCall(async (request) => {
@@ -790,6 +595,7 @@ export const completeMeetup = onCall(async (request) => {
   if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
   if (["SCHEDULING", "CANCELLED"].includes(snapshot.data()?.status)) throw new HttpsError("failed-precondition", "Only a scheduled meetup can be completed.");
   await meetup.update({ status: "COMPLETED" satisfies MeetupStatus, completedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  await deleteMeetupReminderJobs(meetupId);
   return { status: "COMPLETED" };
 });
 
@@ -802,6 +608,7 @@ export const cancelMeetup = onCall(async (request) => {
   if (!snapshot.exists) throw new HttpsError("not-found", "Meetup not found.");
   if (snapshot.data()?.status === "COMPLETED") throw new HttpsError("failed-precondition", "Completed meetups cannot be cancelled.");
   await meetup.update({ status: "CANCELLED" satisfies MeetupStatus, cancelledAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  await deleteMeetupReminderJobs(meetupId);
   return { status: "CANCELLED" };
 });
 
@@ -811,11 +618,17 @@ export const deleteMeetup = onCall(async (request) => {
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
   await requireHost(meetupId, uid);
   const meetup = db.doc(`meetups/${meetupId}`);
-  const notifications = await db.collection("departureNotifications").where("meetupId", "==", meetupId).get();
+  const [notifications, reminders, reminderPreferences] = await Promise.all([
+    db.collection("departureNotifications").where("meetupId", "==", meetupId).get(),
+    db.collection("meetupReminders").where("meetupId", "==", meetupId).get(),
+    db.collection("meetupReminderPreferences").where("meetupId", "==", meetupId).get(),
+  ]);
   await db.recursiveDelete(meetup);
-  if (!notifications.empty) {
+  if (!notifications.empty || !reminders.empty || !reminderPreferences.empty) {
     const writer = db.bulkWriter();
     notifications.docs.forEach((notification) => writer.delete(notification.ref));
+    reminders.docs.forEach((reminder) => writer.delete(reminder.ref));
+    reminderPreferences.docs.forEach((preference) => writer.delete(preference.ref));
     await writer.close();
   }
   return { meetupId };
@@ -874,9 +687,23 @@ export const confirmSchedule = onCall(async (request) => {
       confirmedDateTime: value,
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return { slotId, confirmedDateTime: value.toDate().toISOString(), status: nextStatus };
+    return {
+      slotId,
+      confirmedDateTime: value.toDate().toISOString(),
+      status: nextStatus,
+      meetupTitle: meetupSnapshot.data()?.title as string,
+    };
   });
-  return confirmation;
+  await safelyReplaceMeetupReminderJobs(
+    meetupId,
+    confirmation.meetupTitle,
+    new Date(confirmation.confirmedDateTime),
+  );
+  return {
+    slotId: confirmation.slotId,
+    confirmedDateTime: confirmation.confirmedDateTime,
+    status: confirmation.status,
+  };
 });
 
 /**
@@ -929,6 +756,11 @@ export const updateConfirmedSchedule = onCall(async (request) => {
     confirmedScheduleAvailabilityUpdatedAt: FieldValue.delete(),
   }));
   await batch.commit();
+  await safelyReplaceMeetupReminderJobs(
+    meetupId,
+    meetupSnapshot.data()?.title as string,
+    confirmedDate,
+  );
 
   return {
     status: nextStatus,
@@ -967,6 +799,23 @@ export const searchPlaces = onCall(async (request) => {
     console.error("searchPlaces failed", { message });
     if (message.startsWith("Google Places request failed")) {
       throw new HttpsError("failed-precondition", "Google Places API access was denied. Check the server key, billing, and Places API settings.");
+    }
+    throw caught;
+  }
+});
+
+/** Loads fresh venue metadata on demand without storing changeable business data
+ * in a meetup. All calls use the server-only Places key. */
+export const getPlaceDetails = onCall(async (request) => {
+  requireUid(request.auth?.uid);
+  const placeId = requireString(request.data?.placeId, "placeId", 256);
+  try {
+    return { place: await getMapsProvider().getPlaceDetails(placeId) };
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : "Unknown Places API error.";
+    console.error("getPlaceDetails failed", { message });
+    if (message.startsWith("Google Places details request failed")) {
+      throw new HttpsError("failed-precondition", "Google Places venue details are unavailable. Check the server key, billing, and Places API settings.");
     }
     throw caught;
   }
@@ -1113,16 +962,69 @@ export const calculateRoutes = onCall(async (request) => {
   return { meetingPlace, targetArrivalTime: targetArrival.toISOString(), routes };
 });
 
+/** Enables or disables date reminders for the caller on one meetup. */
+export const setMeetupReminderPreference = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
+  const enabled = requireBoolean(request.data?.enabled, "enabled", false);
+  const locale = request.data?.locale === "ko" ? "ko" : "ja";
+  const participant = await requireParticipant(meetupId, uid);
+  const meetup = await db.doc(`meetups/${meetupId}`).get();
+  if (!meetup.exists) throw new HttpsError("not-found", "Meetup not found.");
+  const data = meetup.data();
+  const confirmedDateTime = data?.confirmedDateTime as Timestamp | undefined;
+  if (enabled && !(confirmedDateTime instanceof Timestamp)) {
+    throw new HttpsError("failed-precondition", "Confirm a schedule before enabling reminders.");
+  }
+  if (enabled && confirmedDateTime!.toMillis() <= Date.now()) {
+    throw new HttpsError("failed-precondition", "Reminders are only available for upcoming meetups.");
+  }
+
+  if (enabled) {
+    const token = requireString(request.data?.token, "token", 4096);
+    await savePushToken(uid, token, request.data?.platform);
+  }
+
+  await db.doc(`meetupReminderPreferences/${meetupId}_${uid}`).set({
+    meetupId,
+    uid,
+    enabled,
+    locale,
+    minutesBefore: [...MEETUP_REMINDER_MINUTES],
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  await participant.ref.set({
+    remindersEnabled: enabled,
+    reminderMinutesBefore: enabled ? [...MEETUP_REMINDER_MINUTES] : FieldValue.delete(),
+    remindersUpdatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  const scheduledCount = await replaceUserMeetupReminderJobs(
+    meetupId,
+    uid,
+    data?.title as string,
+    confirmedDateTime?.toDate() ?? new Date(0),
+    locale,
+    enabled,
+  );
+  return { enabled, scheduledCount, minutesBefore: [...MEETUP_REMINDER_MINUTES] };
+});
+
+/** Keeps the signed-in user's current device token fresh after FCM rotates it. */
+export const registerPushToken = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  const token = requireString(request.data?.token, "token", 4096);
+  await savePushToken(uid, token, request.data?.platform);
+  return { registered: true };
+});
+
 /** Registers the caller's current device for their own calculated departure. */
 export const registerDeviceToken = onCall(async (request) => {
   const uid = requireUid(request.auth?.uid);
   const meetupId = requireString(request.data?.meetupId, "meetupId", 128);
   const token = requireString(request.data?.token, "token", 4096);
   await requireParticipant(meetupId, uid);
-  await db.doc(`users/${uid}/devices/default`).set({
-    token,
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+  await savePushToken(uid, token, request.data?.platform);
 
   return { registered: true };
 });
@@ -1165,6 +1067,78 @@ export const sendDepartureNotifications = onSchedule("every 1 minutes", async ()
       const message = error instanceof Error ? error.message.slice(0, 500) : "Unknown FCM error";
       const invalidToken = /registration-token-not-registered|invalid-registration-token/.test(message);
       await notification.ref.update({
+        status: invalidToken ? "INVALID_TOKEN" : attempts >= 3 ? "FAILED" : "PENDING",
+        lastError: message,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+  }));
+});
+
+/** Delivers opt-in reminders independently from the disabled route feature. */
+export const sendMeetupReminders = onSchedule("every 1 minutes", async () => {
+  const due = await db.collection("meetupReminders")
+    .where("status", "==", "PENDING")
+    .where("sendAt", "<=", Timestamp.now())
+    .limit(100)
+    .get();
+
+  await Promise.all(due.docs.map(async (reminder) => {
+    const job = await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(reminder.ref);
+      const data = current.data();
+      if (!current.exists || data?.status !== "PENDING" ||
+          !(data.sendAt instanceof Timestamp) || data.sendAt.toMillis() > Date.now()) return null;
+      transaction.update(reminder.ref, {
+        status: "SENDING",
+        attempts: (data.attempts ?? 0) + 1,
+        claimedAt: FieldValue.serverTimestamp(),
+      });
+      return data;
+    });
+    if (!job) return;
+
+    try {
+      const [device, meetup] = await Promise.all([
+        db.doc(`users/${job.uid as string}/devices/default`).get(),
+        db.doc(`meetups/${job.meetupId as string}`).get(),
+      ]);
+      const token = device.data()?.token;
+      const meetupData = meetup.data();
+      const confirmedDateTime = meetupData?.confirmedDateTime as Timestamp | undefined;
+      const expectedMeetupAt = job.meetupAt as Timestamp | undefined;
+      if (!meetup.exists || ["COMPLETED", "CANCELLED"].includes(meetupData?.status) ||
+          !(confirmedDateTime instanceof Timestamp) || !(expectedMeetupAt instanceof Timestamp) ||
+          confirmedDateTime.toMillis() !== expectedMeetupAt.toMillis()) {
+        await reminder.ref.update({ status: "CANCELLED", updatedAt: FieldValue.serverTimestamp() });
+        return;
+      }
+      if (typeof token !== "string" || token.length === 0) {
+        await reminder.ref.update({ status: "NO_DEVICE", updatedAt: FieldValue.serverTimestamp() });
+        return;
+      }
+      const copy = meetupReminderCopy(
+        job.locale as string,
+        job.meetupTitle as string,
+        job.minutesBefore as number,
+      );
+      await getMessaging().send({
+        token,
+        notification: copy,
+        data: { meetupId: job.meetupId as string, type: "meetup-reminder" },
+        android: { notification: { sound: "default" } },
+        apns: { payload: { aps: { sound: "default" } } },
+      });
+      await reminder.ref.update({
+        status: "SENT",
+        sentAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      const attempts = (job.attempts ?? 0) + 1;
+      const message = error instanceof Error ? error.message.slice(0, 500) : "Unknown FCM error";
+      const invalidToken = /registration-token-not-registered|invalid-registration-token/.test(message);
+      await reminder.ref.update({
         status: invalidToken ? "INVALID_TOKEN" : attempts >= 3 ? "FAILED" : "PENDING",
         lastError: message,
         updatedAt: FieldValue.serverTimestamp(),
@@ -1299,15 +1273,17 @@ export const getFriendHistory = onCall(async (request) => {
   ]);
   if (profile.data()?.accountType !== "REGISTERED") throw new HttpsError("failed-precondition", "Create an account to view friend history.");
   if (!relationship.exists) throw new HttpsError("not-found", "Friend relationship not found.");
+  const ownAvailable = new Map(participations.docs.map((participant) => [participant.ref.parent.parent?.id, participant.data().confirmedScheduleAvailability !== "NO"]));
   const candidates = await Promise.all(participations.docs.map(async (participant) => participant.ref.parent.parent?.get()));
   const shared = await Promise.all(candidates.filter((meetup): meetup is DocumentSnapshot => Boolean(meetup?.exists)).map(async (meetup) => ({ meetup, other: await meetup.ref.collection("participants").doc(otherUid).get() })));
-  const histories = await Promise.all(shared.filter(({ other }) => other.exists).map(({ meetup }) => historyMeetupPayload(meetup)));
+  const histories = await Promise.all(shared.filter(({ meetup, other }) => other.exists && ownAvailable.get(meetup.id) && other.data()?.confirmedScheduleAvailability !== "NO").map(({ meetup }) => historyMeetupPayload(meetup)));
   histories.sort((a, b) => (b.completedAt ?? b.confirmedDateTime ?? "").localeCompare(a.completedAt ?? a.confirmedDateTime ?? ""));
   return {
     otherUid,
     displayName: relationship.data()?.displayName ?? "aimasho user",
     completedMeetupCount: histories.filter((meetup) => meetup.status === "COMPLETED").length,
     meetups: histories,
+    stops: travelTimelineStops(histories),
   };
 });
 
@@ -1427,30 +1403,9 @@ export const getMyDashboard = onCall(async (request) => {
   const uniqueMeetups = new Map<string, DocumentSnapshot>();
   ownedMeetups.docs.forEach((meetup) => uniqueMeetups.set(meetup.id, meetup));
   meetupSnapshots.forEach((meetup) => { if (meetup.exists) uniqueMeetups.set(meetup.id, meetup); });
-  const histories = await Promise.all([...uniqueMeetups.values()].map(async (snapshot): Promise<HistoryMeetupPayload> => {
-    const data = snapshot.data();
-    const confirmedDateTime = timestampIso(data?.confirmedDateTime);
-    const completedAt = timestampIso(data?.completedAt);
-    // The dashboard does not render plan-place history. Only an unconfirmed
-    // meetup needs its first candidate date, avoiding two subcollection reads
-    // for every item on the signed-in home page.
-    const firstCandidate = !confirmedDateTime && !completedAt
-      ? await snapshot.ref.collection("candidateSlots").orderBy("startDateTime").limit(1).get()
-      : null;
-    const candidateDate = firstCandidate?.docs[0] ? timestampIso(firstCandidate.docs[0].data()?.startDateTime) : null;
-    return {
-      id: snapshot.id,
-      title: data?.title ?? "aimasho meetup",
-      status: data?.status as MeetupStatus,
-      confirmedDateTime,
-      completedAt,
-      meetingPlace: data?.meetingPlace ? data.meetingPlace as Location : null,
-      planPlaces: [],
-      candidateDateTimes: candidateDate ? [candidateDate] : [],
-      roomId: typeof data?.roomId === "string" ? data.roomId : null,
-      isOwner: data?.createdByUid === uid,
-    };
-  }));
+  const histories = await Promise.all(
+    [...uniqueMeetups.values()].map((snapshot) => dashboardMeetupPayload(snapshot, uid)),
+  );
 
   const memberRoomRefs = [...new Map(membershipDocs.flatMap((membership) => {
     const ref = membership.ref.parent.parent;
@@ -1478,12 +1433,11 @@ export const getMyDashboard = onCall(async (request) => {
   });
   const roomNames = new Map(rooms.map((room) => [room.id, room.name]));
   const meetups = histories.map((meetup) => ({ ...meetup, roomName: meetup.roomId ? roomNames.get(meetup.roomId) ?? null : null }));
-  const dateOf = (meetup: HistoryMeetupPayload) => meetup.confirmedDateTime ?? meetup.candidateDateTimes[0] ?? meetup.completedAt ?? "";
   meetups.sort((first, second) => {
     const firstPast = ["COMPLETED", "CANCELLED"].includes(first.status);
     const secondPast = ["COMPLETED", "CANCELLED"].includes(second.status);
     if (firstPast !== secondPast) return firstPast ? 1 : -1;
-    return firstPast ? dateOf(second).localeCompare(dateOf(first)) : dateOf(first).localeCompare(dateOf(second));
+    return firstPast ? historyDate(second).localeCompare(historyDate(first)) : historyDate(first).localeCompare(historyDate(second));
   });
 
   return {
@@ -1501,6 +1455,42 @@ export const getMyDashboard = onCall(async (request) => {
       completedMeetupCount: histories.filter((meetup) => meetup.status === "COMPLETED").length,
       friendCount: relationships.size,
       groupCount: rooms.length,
+    },
+  };
+});
+
+/**
+ * Lazy read model for the Journey player. Keeping this separate prevents the
+ * signed-in home from paying for completed plan-item reads on every visit.
+ */
+export const getMyTravelTimeline = onCall(async (request) => {
+  const uid = requireUid(request.auth?.uid);
+  if (request.auth?.token.firebase?.sign_in_provider === "anonymous") {
+    throw new HttpsError("failed-precondition", "Create an account to view your journey.");
+  }
+  const [profile, participationDocs] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    dashboardCollectionGroupDocs("participants", uid, 150),
+  ]);
+  if (profile.data()?.accountType !== "REGISTERED") {
+    throw new HttpsError("failed-precondition", "Create an account to view your journey.");
+  }
+  const refs = [...new Map(participationDocs.filter((participation) => participation.data().confirmedScheduleAvailability !== "NO").flatMap((participation) => {
+    const ref = participation.ref.parent.parent;
+    return ref ? [[ref.path, ref] as const] : [];
+  })).values()];
+  const snapshots = refs.length > 0 ? await db.getAll(...refs) : [];
+  const completed = snapshots.filter((snapshot) =>
+    snapshot.exists && snapshot.data()?.status === "COMPLETED"
+  );
+  const histories = await Promise.all(completed.map(historyMeetupPayload));
+  const stops = travelTimelineStops(histories);
+  return {
+    stops,
+    summary: {
+      completedMeetupCount: histories.length,
+      uniquePlaceCount: new Set(stops.map((stop) => stop.place.placeId)).size,
+      totalStops: stops.length,
     },
   };
 });

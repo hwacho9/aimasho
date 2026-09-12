@@ -6,6 +6,23 @@ export interface Location {
   longitude: number;
 }
 
+/** Ephemeral public business metadata. This is intentionally not persisted on
+ * meetups: a venue's hours, rating and contact details can change over time. */
+export interface PlaceDetails {
+  placeId: string;
+  name: string;
+  address?: string;
+  category?: string;
+  rating?: number;
+  ratingCount?: number;
+  priceLevel?: string;
+  openNow?: boolean;
+  weekdayDescriptions?: string[];
+  phoneNumber?: string;
+  websiteUri?: string;
+  googleMapsUri?: string;
+}
+
 export interface RouteResult {
   durationMinutes: number;
   transfers?: number;

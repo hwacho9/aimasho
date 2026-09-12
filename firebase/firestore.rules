@@ -51,8 +51,9 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      match /{document=**} {
-        allow read: if participant(meetupId);
+      match /{collectionId}/{document=**} {
+        // A broad allow would override the privateOrigins restriction above.
+        allow read: if collectionId != 'privateOrigins' && participant(meetupId);
         allow write: if false;
       }
     }
